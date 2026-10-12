@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Radio</title>
+  <link rel="stylesheet" href="../node_modules/@fontsource/silkscreen/index.css">
+  <style>
+    /* widget musik: radio retro pixel. Tombol bawah = lagu & volume, kenop TUNE = buka tab musik, saklar = tutup.
+       Seret badannya untuk memindah. */
+    :root {
+      --body: #f1dfb8; --body-dark: #d9bf8c; --ink: #111; --grille: #6b4a2b;
+      --screen: #1d1a14; --amber: #ffb000; --amber-dim: #8a6200; --needle: #ff4d4d; --key: #fff8e7;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --body: #5a3d2b; --body-dark: #3f2a1d; --ink: #000; --grille: #1f140d; --key: #e9dcc0; }
+    }
+    * { box-sizing: border-box; margin: 0; }
+    html, body { height: 100%; overflow: hidden; background: transparent; user-select: none; }
+    body { padding: 18px 9px 9px 4px; font: 8px/1.2 'Silkscreen', ui-monospace, monospace; }
+    .radio {
+      position: relative; height: 100%; display: grid; grid-template: 1fr 20px / 44px 1fr 26px; gap: 6px 7px; padding: 7px 8px;
+      background: var(--body); border: 2px solid var(--ink); border-radius: 10px; box-shadow: 3px 3px 0 var(--ink);
+      -webkit-app-region: drag; cursor: grab;
+    }
+    /* antena pixel */
+    .radio::before {
+      content: ''; position: absolute; right: 30px; top: -17px; width: 3px; height: 18px; background: var(--ink);
+      transform: skewX(-35deg); transform-origin: bottom;
+    }
+    .radio::after { content: ''; position: absolute; right: 23px; top: -20px; width: 5px; height: 5px; background: var(--needle); border: 1px solid var(--ink); }
+    button { -webkit-app-region: no-drag; cursor: pointer; border: 2px solid var(--ink); font: inherit; padding: 0; color: var(--ink); }
+    button:active { transform: translate(1px, 1px); box-shadow: none !important; }
+    svg { fill: currentColor; shape-rendering: crispEdges; height: 7px; width: auto; display: block; }
+
+    /* speaker: grille titik, bergetar saat lagu main */
+    .grille {
+      grid-row: 1 / 3; border: 2px solid var(--ink); border-radius: 6px; background-color: var(--body-dark);
+      background-image: radial-gradient(var(--grille) 1.4px, transparent 1.6px); background-size: 6px 6px; background-position: 1px 1px;
+    }
+    .on-air .grille { animation: thump .45s steps(2) infinite; }
+    @keyframes thump { 50% { background-size: 6.4px 6.4px; } }
+
+    /* layar tuner amber: skala frekuensi + jarum + judul */
+    .screen {
+      position: relative; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; padding: 3px 5px 4px;
+      background: var(--screen); color: var(--amber); border: 2px solid var(--ink); border-radius: 4px; overflow: hidden;
+      box-shadow: inset 0 0 8px rgba(255, 176, 0, .18);
+    }
+    .scale { position: absolute; inset: 3px 5px auto; display: flex; justify-content: space-between; color: var(--amber-dim); font-size: 6px; }
+    .needle { position: absolute; top: 2px; bottom: 2px; left: 50%; width: 2px; background: var(--needle); transition: left .6s steps(6); }
+    .txt { position: relative; overflow: hidden; white-space: nowrap; }
+    .title { display: inline-block; font-size: 9px; }
+    .title.run { animation: marquee 9s linear infinite; padding-left: 100%; }
+    @keyframes marquee { to { transform: translateX(-100%); } }
+    .sub { position: relative; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: .8; }
+    .on-air .live { animation: blink 1s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: .3; } }
+    /* belum ada tab musik: tombol kecil untuk membuka YouTube Music */
+    #openYt { display: none; position: absolute; inset: 12px 5px 4px; background: var(--amber); border-radius: 3px; font-size: 7px; animation: blink 1.2s steps(2) infinite; }
+    .off #openYt { display: block; }
+    .off .txt, .off .sub, .off .needle { visibility: hidden; }
+
+    /* kenop & saklar */
+    .knobs { grid-row: 1 / 3; grid-column: 3; display: flex; flex-direction: column; align-items: center; justify-content: space-between; color: var(--ink); }
+    .knob { width: 24px; height: 24px; border-radius: 50%; background: var(--body-dark); box-shadow: 2px 2px 0 var(--ink); position: relative; transition: transform .3s steps(4); }
+    .knob::after { content: ''; position: absolute; left: 9px; top: 2px; width: 2px; height: 7px; background: var(--ink); }
+    .knob:hover { transform: rotate(45deg); }
+    .power { width: 22px; height: 12px; border-radius: 3px; background: var(--body-dark); position: relative; }
+    .power::after { content: ''; position: absolute; right: 1px; top: 1px; width: 8px; height: 6px; background: var(--needle); border: 1px solid var(--ink); }
+    .knobs small { font-size: 6px; }
+
+    /* tombol piano */
+    .keys { grid-column: 2; display: flex; gap: 3px; }
+    .keys button { flex: 1; display: grid; place-items: center; background: var(--key); border-radius: 3px; box-shadow: 0 2px 0 var(--ink); }
+    .keys [data-cmd=play] { flex: 1.4; background: var(--amber); }
+    .flip { transform: scaleX(-1); }
+  </style>
+</head>
+<body>
+  <div class="radio" id="radio">
+    <div class="grille"></div>
+    <div class="screen">
+      <div class="scale"><span>88</span><span>92</span><span>96</span><span>100</span><span>104</span><span>108</span></div>
+      <i class="needle" id="needle"></i>
+      <div class="txt"><span class="title" id="title">ALMAC FM</span></div>
+      <div class="sub"><span class="live" id="status"></span> <span id="artist"></span></div>
+      <button id="openYt" data-cmd="open" title="Open YouTube Music in a new tab">▶ OPEN YOUTUBE MUSIC</button>
+    </div>
+    <div class="knobs">
+      <button class="knob" data-cmd="open" title="Tune: go to the music tab"></button>
+      <small>TUNE</small>
+      <button class="power" data-cmd="close" title="Turn off the radio (⌘⇧M)"></button>
+    </div>
+    <div class="keys">
+      <button data-cmd="prev" title="Previous track (←)"><svg class="flip" viewBox="0 0 5 5"><path d="M0 0h1v5H0zM1 1h1v3H1zM2 2h1v1H2zM4 0h1v5H4z"/></svg></button>
+      <button data-cmd="play" title="Play / pause (space)"><svg viewBox="0 0 8 5"><path d="M0 0h1v5H0zM1 1h1v3H1zM2 2h1v1H2zM5 0h1v5H5zM7 0h1v5H7z"/></svg></button>
+      <button data-cmd="next" title="Next track (→)"><svg viewBox="0 0 5 5"><path d="M0 0h1v5H0zM1 1h1v3H1zM2 2h1v1H2zM4 0h1v5H4z"/></svg></button>
+      <button data-cmd="volDown" title="Volume down (↓)"><svg viewBox="0 0 5 5"><path d="M0 2h5v1H0z"/></svg></button>
+      <button data-cmd="volUp" title="Volume up (↑)"><svg viewBox="0 0 5 5"><path d="M0 2h5v1H0zM2 0h1v5H2z"/></svg></button>
+    </div>
+  </div>
+<script>
+const $ = id => document.getElementById(id)
+const STATUS = { playing: '● ON AIR', paused: '❚❚ PAUSED' }
+let lastTitle
+function show(s) {
+  if (!s) return
+  const radio = $('radio')
+  radio.classList.toggle('off', s.state === 'off')
+  radio.classList.toggle('on-air', s.state === 'playing')
+  $('status').textContent = STATUS[s.state] || ''
+  $('artist').textContent = s.artist || ''
+  const title = s.title || 'ALMAC FM'
+  if (title !== lastTitle) {
+    lastTitle = title
+    const t = $('title')
+    t.textContent = title
+    t.classList.remove('run')
+    t.classList.toggle('run', t.scrollWidth > t.parentElement.clientWidth) // judul panjang -> berjalan
+    // jarum tuner pindah ke "frekuensi" baru tiap ganti lagu
+    let h = 0
+    for (const c of title) h = (h * 31 + c.charCodeAt(0)) >>> 0
+    $('needle').style.left = 8 + h % 85 + '%'
+  }
+}
+const send = cmd => music(cmd).then(show)
+document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => send(b.dataset.cmd)))
+const KEYS = { ' ': 'play', ArrowLeft: 'prev', ArrowRight: 'next', ArrowUp: 'volUp', ArrowDown: 'volDown', Escape: 'close' }
+addEventListener('keydown', e => { if (KEYS[e.key]) { e.preventDefault(); send(KEYS[e.key]) } })
+send('state')
+setInterval(() => send('state'), 2000)
+</script>
+</body>
+</html>

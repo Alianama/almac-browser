@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.0.0-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.1.0-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
@@ -36,6 +36,17 @@
 - **JavaScript toggle** per browser session
 - **Site permissions** (camera, microphone, location, notifications, clipboard) with per-origin memory
 - **Private (ephemeral) mode** — zero disk storage, no history, no extensions
+- **HTTPS-Only mode** — http:// is upgraded automatically, with a warning before opening an insecure site
+- **Tracking parameter removal** — strips `utm_*`, `fbclid`, `gclid` and friends from links
+- **Global Privacy Control** — sent together with Do Not Track
+- **Private session auto-delete** after a chosen idle time
+- **Crashed tab recovery** — reload prompt instead of a blank page
+
+### ⚡ Productivity & Fun
+- **Command palette (⌘K)** — search tabs across workspaces, bookmarks, history and commands
+- **Reopen closed tab (⌘⇧T)** and **Picture-in-Picture (⌘⌥P)**
+- **Focus mode** — block distracting sites for 25/50/90 minutes
+- **Almi, the pixel pet** — eats blocked trackers, sleeps when your tabs sleep; click for weekly stats
 
 ### 🔖 Profiles
 - Multiple **isolated profiles** — separate cookies, history, bookmarks, extensions
@@ -80,6 +91,14 @@ Tabbed settings panel similar to Chrome:
 ### Prerequisites
 - **Node.js** 18+
 - **macOS** (primary target; Linux/Windows partially supported)
+
+### Download
+Grab the `.dmg` from [Releases](https://github.com/Alianama/almac-browser/releases) (`arm64` = Apple Silicon, the other = Intel).
+The app is not notarized, so on first launch right-click the app → **Open**, or run:
+`xattr -dr com.apple.quarantine "/Applications/Almac Browser.app"`
+
+### Build
+`npm run dist` → output in `dist/`
 
 ### Run from Source
 

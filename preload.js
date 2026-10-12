@@ -19,5 +19,9 @@ contextBridge.exposeInMainWorld('almac', {
   onToggleDownloads: fn => ipcRenderer.on('toggle-downloads', fn),
   onDownloadStarted: fn => ipcRenderer.on('download-started', (_, name) => fn(name)),
   onPermRequest: fn => ipcRenderer.on('perm-request', (_, r) => fn(r)),
+  onOpenPalette: fn => ipcRenderer.on('open-palette', fn),
+  onToast: fn => ipcRenderer.on('toast', (_, text) => fn(text)),
+  onTabCrashed: fn => ipcRenderer.on('tab-crashed', (_, r) => fn(r)),
+  onHttpsFailed: fn => ipcRenderer.on('https-failed', (_, r) => fn(r)),
   ask: (type, arg) => ipcRenderer.invoke('ask', type, arg),
 })

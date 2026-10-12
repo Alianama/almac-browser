@@ -116,9 +116,12 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 #url { flex: 1; min-width: 0; height: 100%; font: inherit; font-size: 13px; color: var(--text); background: none; border: 0; outline: none; }
 #url::placeholder { color: var(--muted); }
 
-/* toolbar ekstensi yang di-pin */
+/* baris ekstensi di bawah kolom alamat, rata kanan: ikon yang di-pin (scroll ke samping kalau banyak) + tombol kelola */
+.ext-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; }
+#extBtn { flex: none; height: 28px; min-width: 28px; }
 browser-action-list {
-  display: none; flex-wrap: nowrap; gap: 6px; padding: 4px 2px; flex: none;
+  display: none; flex-wrap: nowrap; gap: 4px; padding: 2px; flex: 0 1 auto; min-width: 0;
+  direction: rtl; /* pin pertama paling kanan (dekat tombol), pin baru bertambah ke kiri */
   overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain;
   --browser-action-hover-bg: var(--glass-strong);
   /* fade di tepi saat bisa di-scroll (kelas diatur JS) */
@@ -263,7 +266,7 @@ button.dot.on { background: var(--accent); width: 22px; }
 .hrow:hover .hx { opacity: 1; }
 .hrow .hx:hover { background: #ff6b7a; color: #111; border-color: var(--border); transform: none; }
 .store.danger:hover { background: #ff6b7a; color: #111; }
-#historyBtn.on { background: var(--accent); color: #111; }
+#historyBtn.on, #musicBtn.on { background: var(--accent); color: #111; }
 
 /* ---------- modal pixel ---------- */
 #overlay {
@@ -639,3 +642,24 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 .empty kbd { font-family: var(--font-pixel); font-size: 10px; padding: 2px 6px; border: var(--bw) solid var(--border); border-radius: 6px; background: var(--glass-strong); }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* pet pixel (Almi), badge fokus, command palette, statistik */
+.pet { margin-left: auto; width: 26px; height: 24px; padding: 2px; flex: none; background: none; border: 0; box-shadow: none; -webkit-app-region: no-drag; cursor: pointer; }
+.pet svg { width: 100%; height: 100%; display: block; }
+.pet[data-mood="idle"] svg { animation: pet-bob 1.6s steps(2) infinite; }
+.pet[data-mood="sleep"] svg { opacity: .7; }
+.pet.eat svg { animation: pet-eat .5s steps(3); }
+@keyframes pet-bob { 50% { transform: translateY(-1px); } }
+@keyframes pet-eat { 33% { transform: scale(1.15, .85); } 66% { transform: scale(.9, 1.1); } }
+.pet.big { width: 72px; height: 60px; flex: none; }
+.pet.big svg { width: 100%; height: 100%; animation: pet-bob 1.6s steps(2) infinite; }
+.focus-badge { margin-left: 6px; padding: 2px 5px; font-size: 9px; color: #111; background: #ffcd75; border: var(--bw) solid var(--border); border-radius: 5px; box-shadow: 2px 2px 0 var(--shadow); cursor: pointer; -webkit-app-region: no-drag; }
+#shield { cursor: pointer; }
+.palette-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.palette-list .sug small { margin-left: auto; }
+.focus-sites { height: auto; min-height: 120px; padding: 8px; resize: vertical; font-family: var(--font-ui); }
+.stats-hero { display: flex; align-items: center; gap: 14px; }
+.stats-bars { display: flex; align-items: flex-end; gap: 8px; height: 140px; padding-top: 8px; }
+.stats-bars .bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
+.stats-bars .bar i { width: 100%; min-height: 2px; background: var(--accent); border: var(--bw) solid var(--border); box-shadow: 2px 2px 0 var(--shadow); }
+.stats-bars small { font-size: 10px; color: var(--muted); }

@@ -53,7 +53,7 @@ process.on('uncaughtException', e => {
 })
 
 let win, blocker
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -71,6 +71,36 @@ const sideWidth = () => {
 }
 const sideSpace = () => state.sidebar.mode === 'pinned' ? sideWidth() : 0 // ruang sidebar di kiri halaman
 const certs = new Map() // "profileId|hostname" -> sertifikat terakhir yang diverifikasi Chromium
+const closedTabs = [] // tab yang baru ditutup (⌘⇧T), maks 20, hanya selama sesi
+const httpAllowed = new Set() // host yang boleh http setelah user setuju (HTTPS-Only), hanya selama sesi
+const upgraded = new Set() // url https hasil upgrade otomatis -> kalau gagal dimuat, tawarkan versi http
+let privSeen = 0 // terakhir kali profil privat aktif (hapus otomatis)
+const focusOn = () => state.focus.until > Date.now()
+const dayKey = (d = new Date()) => d.toISOString().slice(0, 10)
+const isLocalHost = h => h === 'localhost' || h.endsWith('.local') || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[)/.test(h) || /^\d+\.\d+\.\d+\.\d+$/.test(h)
+// parameter pelacak di URL (utm_*, fbclid, ...) dibuang sebelum halaman dimuat
+const TRACK_PARAM = /^(utm_\w+|fbclid|gclid|dclid|gbraid|wbraid|msclkid|yclid|mc_eid|mc_cid|igshid|_hsenc|_hsmi|mkt_tok|twclid|ttclid|si)$/i
+function cleanUrl(url) {
+  const u = new URL(url)
+  if (!u.search) return url
+  let changed = false
+  for (const k of [...u.searchParams.keys()]) if (TRACK_PARAM.test(k) && !(k === 'si' && !/(youtube|youtu\.be|spotify)/.test(u.hostname))) { u.searchParams.delete(k); changed = true }
+  return changed ? u.toString() : url
+}
+// pihak ketiga = domain request beda dengan domain halaman tab
+const thirdParty = d => {
+  if (d.resourceType === 'mainFrame') return false
+  const top = d.webContents?.getURL()
+  if (!top) return false
+  return (getDomain(hostOf(d.url)) || hostOf(d.url)) !== (getDomain(hostOf(top)) || hostOf(top))
+}
+const dropCookies = d => state.cookiePolicy === 'block_all' || (state.cookiePolicy === 'block_third_party' && thirdParty(d))
+// DNS-over-HTTPS berlaku untuk seluruh app (Chromium: satu resolver untuk semua sesi)
+function applyDns() {
+  const url = /^https:\/\//.test(state.customDns || '') ? state.customDns : ''
+  if (state.dnsMode === 'doh' && url) app.configureHostResolver({ secureDnsMode: 'secure', secureDnsServers: [url] })
+  else app.configureHostResolver({ secureDnsMode: state.dnsMode === 'off' ? 'off' : 'automatic' })
+}
 
 // ---- izin situs (seperti Chrome: tanya dulu, bisa diingat per situs) ----
 const PERM_KIND = { geolocation: 'geolocation', notifications: 'notifications', 'clipboard-read': 'clipboard', openExternal: 'openExternal' }
@@ -112,7 +142,7 @@ let downloadsVersion = 0, downloadTimer
 
 function load() {
   try { state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) } } catch {}
-  if (!state.profiles.length) state.profiles.push({ id: 'p1', name: 'Pribadi', color: '#41a6f6' })
+  if (!state.profiles.length) state.profiles.push({ id: 'p1', name: 'Personal', color: '#41a6f6' })
   if (!state.profiles.some(p => p.id === state.activeProfile)) state.activeProfile = state.profiles[0].id
   state.profiles.forEach(workspaces)
   state.tabs = state.tabs.map(t => ({
@@ -136,7 +166,7 @@ const EMOJI_ICON = {
 }
 // tiap profil punya workspace (grup tab), minimal satu
 function workspaces(p) {
-  if (!p.workspaces?.length) p.workspaces = [{ id: uid('w'), name: 'Utama' }]
+  if (!p.workspaces?.length) p.workspaces = [{ id: uid('w'), name: 'Main' }]
   p.workspaces.forEach(w => { if (EMOJI_ICON[w.icon]) w.icon = EMOJI_ICON[w.icon] })
   if (!p.workspaces.some(w => w.id === p.activeWs)) p.activeWs = p.workspaces[0].id
   return p.workspaces
@@ -200,7 +230,7 @@ function importSources() {
 
 async function importRun({ browser, dir, bookmarks: wantBookmarks, history: wantHistory }) {
   // hanya profil yang memang terdeteksi (jangan baca path sembarang dari UI)
-  if (!importSources().some(s => s.browser === browser && s.dir === dir)) throw new Error('Sumber import tidak dikenal')
+  if (!importSources().some(s => s.browser === browser && s.dir === dir)) throw new Error('Unknown import source')
   const base = path.join(browserDir(browser), dir)
   const label = CHROMIUM_BROWSERS[browser][0]
   const profileId = state.activeProfile
@@ -286,7 +316,7 @@ function flush() {
     activeWs: activeWs(),
     accent: profileOf(state.activeProfile).workspaces.find(w => w.id === activeWs())?.color || profileOf(state.activeProfile).color,
     tabs: state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === activeWs()).map(t => ({
-      id: t.id, title: t.title || t.url || 'Tab baru', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
+      id: t.id, title: t.title || t.url || 'New tab', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
     })),
     url: active?.url || '',
     security: security(active),
@@ -306,6 +336,12 @@ function flush() {
     customDns: state.customDns || '', dnsMode: state.dnsMode || 'auto',
     blockJavaScript: !!state.blockJavaScript, cookiePolicy: state.cookiePolicy || 'allow',
     doNotTrack: !!state.doNotTrack, hardwareAcceleration: state.hardwareAcceleration !== false,
+    music: !!musicWin,
+    httpsOnly: state.httpsOnly, stripTracking: state.stripTracking, privateWipeAfter: state.privateWipeAfter,
+    focusUntil: focusOn() ? state.focus.until : 0, focusSites: state.focus.sites,
+    canReopen: closedTabs.length > 0,
+    allSleeping: !state.tabs.some(t => t.view),
+    blockedToday: state.stats[dayKey()] || 0,
   })
   // profil privat tidak pernah ditulis ke disk
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
@@ -332,12 +368,19 @@ function profileCtx(profileId) {
   const ses = session.fromPartition(profileOf(profileId)?.ephemeral ? 'private-' + profileId : 'persist:' + profileId)
   ses.setUserAgent(UA)
   ses.setSpellCheckerEnabled(false)
+  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'media-preload.js') }) // widget musik
   // navigasi + XHR/fetch: login Google = UA dengan token Electron (Client Hints asli tetap dikirim);
   // situs lain tidak diubah, kecuali dipastikan kembali ke UA Chrome setelah keluar dari halaman login
-  ses.webRequest.onBeforeSendHeaders({ urls: ['<all_urls>'], types: ['mainFrame', 'subFrame', 'xhr'] }, (details, callback) => {
+  // + Do Not Track / Global Privacy Control, + kebijakan cookie (header Cookie dibuang)
+  ses.webRequest.onBeforeSendHeaders({ urls: ['<all_urls>'] }, (details, callback) => {
     const login = isGoogleLogin(details.url)
-    if (!login && details.requestHeaders['User-Agent'] !== GOOGLE_LOGIN_UA) return callback({}) // jalur cepat: tidak diubah
-    const headers = { ...details.requestHeaders, 'User-Agent': login ? GOOGLE_LOGIN_UA : UA }
+    const fixUa = (login || details.requestHeaders['User-Agent'] === GOOGLE_LOGIN_UA) && ['mainFrame', 'subFrame', 'xhr'].includes(details.resourceType)
+    const noCookie = 'Cookie' in details.requestHeaders && dropCookies(details)
+    if (!fixUa && !noCookie && !state.doNotTrack) return callback({}) // jalur cepat: tidak diubah
+    const headers = { ...details.requestHeaders }
+    if (fixUa) headers['User-Agent'] = login ? GOOGLE_LOGIN_UA : UA
+    if (noCookie) delete headers.Cookie
+    if (state.doNotTrack) { headers.DNT = '1'; headers['Sec-GPC'] = '1' }
     callback({ requestHeaders: headers })
   })
   // catat sertifikat untuk Info Situs; -3 = pakai hasil verifikasi Chromium apa adanya
@@ -366,6 +409,36 @@ function profileCtx(profileId) {
     ipcMain.removeHandler('@ghostery/adblocker/is-mutation-observer-enabled')
     blocker.enableBlockingInSession(ses)
   }
+  // Electron hanya menerima satu listener per event webRequest -> handler Ghostery dibungkus, bukan ditimpa
+  ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+    if (details.resourceType === 'mainFrame' && /^https?:/.test(details.url)) {
+      const u = new URL(details.url)
+      if (focusOn() && state.focus.sites.some(s => u.hostname === s || u.hostname.endsWith('.' + s))) {
+        win?.webContents.send('toast', `Focus mode: ${u.hostname} blocked (${Math.ceil((state.focus.until - Date.now()) / 60000)} min left)`)
+        return callback({ cancel: true })
+      }
+      if (state.httpsOnly && u.protocol === 'http:' && !isLocalHost(u.hostname) && !httpAllowed.has(u.hostname)) {
+        u.protocol = 'https:'
+        upgraded.add(u.toString())
+        return callback({ redirectURL: u.toString() })
+      }
+      if (state.stripTracking) {
+        const clean = cleanUrl(details.url)
+        if (clean !== details.url) return callback({ redirectURL: clean })
+      }
+    }
+    blocker ? blocker.onBeforeRequest(details, callback) : callback({})
+  })
+  ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, callback) => {
+    const h = details.responseHeaders
+    const key = h && Object.keys(h).find(k => k.toLowerCase() === 'set-cookie')
+    if (key && dropCookies(details)) {
+      const responseHeaders = { ...h }
+      delete responseHeaders[key]
+      return blocker ? blocker.onHeadersReceived({ ...details, responseHeaders }, r => callback({ responseHeaders, ...r })) : callback({ responseHeaders })
+    }
+    blocker ? blocker.onHeadersReceived(details, callback) : callback({})
+  })
   const findTab = wc => state.tabs.find(t => t.view?.webContents === wc)
   const extensions = new ElectronChromeExtensions({
     license: 'GPL-3.0',
@@ -437,7 +510,7 @@ function activeTab() {
 function wake(t) {
   if (!t.url) return // tab baru kosong: halaman Almac di UI, belum ada webContents
   const { ses, extensions } = profileCtx(t.profileId)
-  t.view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, spellcheck: false } })
+  t.view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, spellcheck: false, javascript: !state.blockJavaScript } })
   t.view.setBorderRadius(10)
   const wc = t.view.webContents
   extensions.addTab(wc, win)
@@ -457,10 +530,24 @@ function wake(t) {
   wc.on('focus', () => { // klik di panel split lain -> panel itu jadi tab aktif (kolom alamat ikut)
     if (t !== activeTab() && isShown(t)) { t.lastActive = Date.now(); profileCtx(t.profileId).extensions.selectTab(wc); render(true) }
   })
+  wc.on('media-started-playing', () => { musicTab = t })
+  // renderer crash: tab di belakang ditidurkan (dimuat ulang saat dipilih), tab yang tampil -> tanya muat ulang
+  wc.on('render-process-gone', (_, d) => {
+    if (d.reason === 'clean-exit' || !state.tabs.includes(t)) return
+    if (!isShown(t)) return setImmediate(() => { sleep(t); render() })
+    win?.webContents.send('tab-crashed', { id: t.id, title: t.title || t.url, reason: d.reason })
+  })
+  // HTTPS-Only: versi https gagal -> tawarkan buka versi http (tidak aman)
+  wc.on('did-fail-load', (_, code, desc, url, isMainFrame) => {
+    const https = url.replace(/^http:/, 'https:') // juga kasus https -> redirect balik ke http (loop)
+    if (!isMainFrame || code === -3 || !upgraded.has(https)) return // -3 = dibatalkan
+    upgraded.delete(https)
+    win?.webContents.send('https-failed', { id: t.id, url: url.replace(/^https:/, 'http:'), host: hostOf(url), error: desc })
+  })
   wc.on('found-in-page', (_, r) => { if (t === activeTab()) win?.webContents.send('find-result', { active: r.activeMatchOrdinal, matches: r.matches }) })
   // zoom per situs: terapkan zoom tersimpan setiap pindah halaman
   wc.on('did-navigate', () => { const z = state.zoom[hostOf(wc.getURL())]; if (z && z !== 1) wc.setZoomFactor(z) })
-  wc.on('did-navigate', () => sync(true))
+  wc.on('did-navigate', () => { t.blockedSeen = null; sync(true) })
   wc.on('did-navigate-in-page', (_, url, isMainFrame) => { if (isMainFrame) sync(true) })
   wc.on('page-title-updated', () => sync(false))
   wc.on('page-favicon-updated', (_, icons) => {
@@ -541,6 +628,7 @@ function unsplit(t) {
 }
 
 function closeTab(t) {
+  if (t.url && !profileOf(t.profileId)?.ephemeral) { closedTabs.push({ url: t.url, profileId: t.profileId, wsId: t.wsId }); if (closedTabs.length > 20) closedTabs.shift() }
   unsplit(t)
   sleep(t)
   state.tabs = state.tabs.filter(x => x !== t)
@@ -580,7 +668,7 @@ const commands = {
     t ? selectTab(t) : newTab()
   },
   addProfile: ({ name, color }) => {
-    const p = { id: 'p' + Date.now().toString(36), name: name || 'Profil', color: color || '#ffcd75' }
+    const p = { id: 'p' + Date.now().toString(36), name: name || 'Profile', color: color || '#ffcd75' }
     workspaces(p)
     state.profiles.push(p)
     state.activeProfile = p.id
@@ -603,8 +691,9 @@ const commands = {
   ready: render, // UI baru dimuat/reload -> kirim state
   openPrivate: () => {
     let p = state.profiles.find(p => p.ephemeral)
-    if (!p) { p = { id: uid('private'), name: 'Privat', color: '#8b5cf6', icon: 'eye-off', ephemeral: true }; workspaces(p); state.profiles.push(p) }
+    if (!p) { p = { id: uid('private'), name: 'Private', color: '#8b5cf6', icon: 'eye-off', ephemeral: true }; workspaces(p); state.profiles.push(p) }
     state.activeProfile = p.id
+    privSeen = Date.now()
     newTab()
   },
   closePrivate: () => {
@@ -623,31 +712,20 @@ const commands = {
     if (key === 'newTabPage' && ['almac', 'engine'].includes(value)) state.newTabPage = value
     if (key === 'bookmarkBar') { state.bookmarkBar = !!value; layout() }
     if (key === 'sleepAfter' && [0, 5, 10, 30].includes(value)) state.sleepAfter = value
-    if (key === 'dnsMode' && ['auto', 'doh', 'off'].includes(value)) {
-      state.dnsMode = value
-      // Terapkan DNS-over-HTTPS ke semua sesi aktif
-      const dohUrl = value === 'doh' && state.customDns ? state.customDns : value === 'off' ? '' : null
-      for (const [pid, c] of Object.entries(ctx)) {
-        if (dohUrl !== null) c.ses.setSSLConfig?.({ enableDNSOverHTTPS: !!dohUrl, dnsOverHTTPSURL: dohUrl || undefined })
-      }
-    }
-    if (key === 'customDns') {
-      state.customDns = (value || '').trim()
-      if (state.dnsMode === 'doh') {
-        for (const [pid, c] of Object.entries(ctx)) {
-          c.ses.setSSLConfig?.({ enableDNSOverHTTPS: !!state.customDns, dnsOverHTTPSURL: state.customDns || undefined })
-        }
-      }
-    }
+    if (key === 'dnsMode' && ['auto', 'doh', 'off'].includes(value)) { state.dnsMode = value; applyDns() }
+    if (key === 'customDns') { state.customDns = (value || '').trim(); applyDns() }
     if (key === 'blockJavaScript') {
       state.blockJavaScript = !!value
-      // JavaScript: terapkan ke sesi aktif (berlaku untuk tab baru)
-      for (const [pid, c] of Object.entries(ctx)) {
-        c.ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, cb) => cb({ cancel: false }))
-      }
+      // webPreferences.javascript hanya berlaku saat halaman dibuat -> tidurkan semua tab, yang tampil langsung dihidupkan ulang
+      state.tabs.forEach(sleep)
+      layout()
     }
     if (key === 'cookiePolicy' && ['allow', 'block_third_party', 'block_all'].includes(value)) state.cookiePolicy = value
     if (key === 'doNotTrack') state.doNotTrack = !!value
+    if (key === 'httpsOnly') state.httpsOnly = !!value
+    if (key === 'stripTracking') state.stripTracking = !!value
+    if (key === 'privateWipeAfter' && [0, 15, 30, 60].includes(value)) state.privateWipeAfter = value
+    if (key === 'focusSites' && Array.isArray(value)) state.focus.sites = [...new Set(value.map(s => String(s).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')).filter(Boolean))].slice(0, 100)
     render(true)
   },
   profileUpdate: ({ id, name, color, icon }) => {
@@ -680,6 +758,8 @@ const commands = {
     const cookies = await ses.cookies.get({ domain })
     await Promise.all(cookies.map(c => ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})))
     await ses.clearStorageData({ origin, storages: SITE_STORAGES })
+    history = history.filter(h => !(h.p === state.activeProfile && (getDomain(hostOf(h.url)) || hostOf(h.url)) === domain)) // lupakan situs ini
+    saveHistory()
     activeTab()?.view?.webContents.reload()
   },
 
@@ -894,6 +974,7 @@ const commands = {
   historyRemove: url => { history = history.filter(h => !(h.url === url && h.p === state.activeProfile)); saveHistory() },
   historyClear: () => { history = history.filter(h => h.p !== state.activeProfile); saveHistory() },
   webStore: () => newTab('https://chromewebstore.google.com/'),
+  music: () => toggleMusic(),
   // iCloud Keychain tidak bisa diakses browser non-resmi -> salin domain & buka app Passwords untuk dicari
   passwords: () => {
     try { clipboard.writeText(new URL(activeTab()?.url).hostname.replace(/^www\./, '')) } catch {}
@@ -932,6 +1013,30 @@ const commands = {
     await uninstallExtension(id, { session: profileCtx(profileId).ses, extensionsPath: extDir(profileId) })
     render()
   },
+  reopenTab: () => {
+    const c = closedTabs.pop()
+    if (!c) return
+    const p = profileOf(c.profileId)
+    if (!p) return commands.reopenTab()
+    state.activeProfile = p.id
+    if (p.workspaces.some(w => w.id === c.wsId)) p.activeWs = c.wsId
+    newTab(c.url, p.id)
+  },
+  reloadTab: id => state.tabs.find(t => t.id === id)?.view?.webContents.reload(),
+  allowHttp: ({ id, url }) => {
+    const t = state.tabs.find(t => t.id === id)
+    if (!t?.view || !/^http:/.test(url)) return
+    httpAllowed.add(hostOf(url))
+    t.view.webContents.loadURL(url)
+  },
+  // Picture-in-Picture: video terbesar yang sedang diputar di tab aktif (klik lagi = keluar)
+  pip: () => activeTab()?.view?.webContents.executeJavaScript(`(() => {
+    if (document.pictureInPictureElement) return document.exitPictureInPicture()
+    const v = [...document.querySelectorAll('video')].filter(v => v.readyState > 0).sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0]
+    if (v) v.requestPictureInPicture().catch(() => {})
+  })()`, true).catch(() => {}),
+  focusStart: minutes => { state.focus.until = Date.now() + Math.min(240, Math.max(1, +minutes || 25)) * 60000; render(true) },
+  focusStop: () => { state.focus.until = 0; render(true) },
   theme: () => {
     const order = ['system', 'light', 'dark']
     state.theme = order[(order.indexOf(state.theme) + 1) % order.length]
@@ -940,7 +1045,9 @@ const commands = {
   },
 }
 
-ipcMain.on('cmd', (_, type, arg) => commands[type]?.(arg))
+// hanya jendela UI Almac yang boleh memberi perintah
+const fromUI = e => e.sender === win?.webContents
+ipcMain.on('cmd', (e, type, arg) => { if (fromUI(e)) commands[type]?.(arg) })
 
 const matches = (h, q) => (h.title + ' ' + h.url).toLowerCase().includes(q)
 const queries = {
@@ -957,6 +1064,12 @@ const queries = {
   },
   importSources,
   importRun,
+  // command palette: semua tab di profil aktif (semua workspace)
+  allTabs: () => state.tabs.filter(t => t.profileId === state.activeProfile).map(t => ({
+    id: t.id, title: t.title || t.url || 'New tab', url: t.url, favicon: t.favicon,
+    ws: profileOf(t.profileId).workspaces.find(w => w.id === t.wsId)?.name,
+  })),
+  stats: () => Array.from({ length: 7 }, (_, i) => { const k = dayKey(new Date(Date.now() - (6 - i) * 864e5)); return { day: k, n: state.stats[k] || 0 } }),
   bookmarkCurrent: () => commands.bookmarkAddCurrent(),
   downloads: () => downloads.filter(d => d.p === state.activeProfile).slice().reverse(),
   suggest: async q => {
@@ -969,7 +1082,7 @@ const queries = {
     let search = []
     try {
       // saran dari mesin pencari yang dipilih (format OpenSearch: [query, [saran...]])
-      if (!engine().suggest) throw new Error('tanpa saran')
+      if (!engine().suggest) throw new Error('no suggestions')
       const res = await fetch(engine().suggest + encodeURIComponent(q), { signal: AbortSignal.timeout(1500) })
       search = (await res.json())[1].filter(s => s.toLowerCase() !== lq).slice(0, 5)
     } catch {}
@@ -1027,7 +1140,68 @@ queries.siteInfo = async () => {
     cookies: cookies.length, blocked: t.blocked, perms: sitePermsOf(t.profileId, u.origin),
   }
 }
-ipcMain.handle('ask', (_, type, arg) => queries[type]?.(arg))
+ipcMain.handle('ask', (e, type, arg) => fromUI(e) ? queries[type]?.(arg) : null)
+
+// ---- widget musik: radio retro pixel melayang yang mengontrol tab musik di Almac (default YouTube Music; situs lain juga bisa) ----
+// Spotify Web tidak bisa diputar: Electron standar tidak punya Widevine DRM.
+const MUSIC_HOME = 'https://music.youtube.com/'
+let musicWin = null
+let musicTab = null // tab terakhir yang memutar media; tidak ditidurkan supaya bisa dilanjutkan dari widget
+const liveMusicTab = () => {
+  const playing = state.tabs.find(t => t.view?.webContents.isCurrentlyAudible())
+  if (playing) musicTab = playing
+  // belum pernah diputar: pakai tab YouTube Music yang sudah terbuka (tidak buka tab baru)
+  if (!state.tabs.includes(musicTab)) musicTab = state.tabs.find(t => t.url?.startsWith(MUSIC_HOME)) || null
+  return musicTab
+}
+// handler Media Session ditangkap media-preload.js; tanpa handler -> elemen <video>/<audio> pertama
+const mediaJs = (action, fallback) => `(() => {
+  const h = window.__almacMedia?.[${JSON.stringify(action)}]
+  if (h) return void h({ action: ${JSON.stringify(action)} })
+  const v = [...document.querySelectorAll('video, audio')].find(v => v.currentSrc)
+  if (v) ${fallback}
+})()`
+const MEDIA = {
+  play: t => mediaJs(t.view.webContents.isCurrentlyAudible() ? 'pause' : 'play', 'v.paused ? v.play() : v.pause()'),
+  next: () => mediaJs('nexttrack', 'v.currentTime = v.duration || 0'),
+  prev: () => mediaJs('previoustrack', 'v.currentTime = 0'),
+  volUp: () => mediaJs('-', 'v.volume = Math.min(1, v.volume + .1)'),
+  volDown: () => mediaJs('-', 'v.volume = Math.max(0, v.volume - .1)'),
+}
+const MEDIA_INFO = `(() => {
+  const m = navigator.mediaSession?.metadata
+  return { title: m?.title || document.title, artist: m?.artist || '', art: m?.artwork?.at(-1)?.src || '' }
+})()`
+ipcMain.handle('music', async (e, cmd) => {
+  if (e.sender !== musicWin?.webContents) return null
+  if (cmd === 'close') return toggleMusic()
+  let t = liveMusicTab()
+  if (cmd === 'open') { t ? selectTab(t) : newTab(MUSIC_HOME); return null }
+  if (!t) return { state: 'off' }
+  if (!t.view) wake(t)
+  const wc = t.view.webContents
+  if (MEDIA[cmd]) await wc.executeJavaScript(MEDIA[cmd](t), true).catch(() => {})
+  const info = await wc.executeJavaScript(MEDIA_INFO).catch(() => ({ title: t.title }))
+  return { state: wc.isCurrentlyAudible() ? 'playing' : 'paused', title: String(info.title || ''), artist: String(info.artist || ''), art: /^https:/.test(info.art) ? info.art : '' }
+})
+function toggleMusic() {
+  if (musicWin) { state.music = { ...state.music, on: false }; musicWin.close(); return }
+  const b = win.getBounds()
+  // ponytail: posisi tersimpan tidak dicek terhadap layar yang ada; geser balik kalau monitor eksternal dilepas
+  const { x = b.x + b.width - 300, y = b.y + b.height - 160 } = state.music || {}
+  state.music = { x, y, on: true }
+  musicWin = new BrowserWindow({
+    parent: win, x, y, width: 280, height: 128, frame: false, transparent: true, hasShadow: false,
+    resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
+    webPreferences: { preload: path.join(__dirname, 'music-preload.js'), sandbox: true, contextIsolation: true },
+  })
+  musicWin.webContents.on('will-navigate', e => e.preventDefault())
+  musicWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  musicWin.on('moved', () => { const [x, y] = musicWin.getPosition(); state.music = { x, y, on: true }; render() })
+  musicWin.on('closed', () => { musicWin = null; render() })
+  musicWin.loadFile(path.join(__dirname, 'ui', 'music.html'))
+  render()
+}
 
 function buildMenu() {
   const send = ch => () => { win.webContents.focus(); win.webContents.send(ch) }
@@ -1036,42 +1210,46 @@ function buildMenu() {
       label: 'Almac Browser',
       submenu: [
         { role: 'about' }, { type: 'separator' },
-        { label: 'Pengaturan…', accelerator: 'CmdOrCtrl+,', click: send('open-settings') },
+        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('open-settings') },
         { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' },
       ],
     },
     {
       label: 'Tab',
       submenu: [
-        { label: 'Tab Baru', accelerator: 'CmdOrCtrl+T', click: () => { commands.newTab(); send('focus-url')() } },
-        { label: 'Tutup Tab', accelerator: 'CmdOrCtrl+W', click: () => { const t = activeTab(); if (t) closeTab(t) } },
-        { label: 'Tab Privat Baru', accelerator: 'CmdOrCtrl+Shift+N', click: () => commands.openPrivate() },
-        { label: 'Fokus Alamat', accelerator: 'CmdOrCtrl+L', click: send('focus-url') },
-        { label: 'Cari di Halaman', accelerator: 'CmdOrCtrl+F', click: () => { commands.findOpen(); send('open-find')() } },
-        { label: 'Hasil Berikutnya', accelerator: 'CmdOrCtrl+G', click: send('find-next') },
-        { label: 'Hasil Sebelumnya', accelerator: 'CmdOrCtrl+Shift+G', click: send('find-prev') },
+        { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => { commands.newTab(); send('focus-url')() } },
+        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => { const t = activeTab(); if (t) closeTab(t) } },
+        { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => commands.reopenTab() },
+        { label: 'Command Palette', accelerator: 'CmdOrCtrl+K', click: send('open-palette') },
+        { label: 'New Private Tab', accelerator: 'CmdOrCtrl+Shift+N', click: () => commands.openPrivate() },
+        { label: 'Focus Address Bar', accelerator: 'CmdOrCtrl+L', click: send('focus-url') },
+        { label: 'Find in Page', accelerator: 'CmdOrCtrl+F', click: () => { commands.findOpen(); send('open-find')() } },
+        { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: send('find-next') },
+        { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: send('find-prev') },
         { type: 'separator' },
-        { label: 'Perbesar', accelerator: 'CmdOrCtrl+=', click: () => commands.zoom(1) },
-        { label: 'Perbesar', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => commands.zoom(1) },
-        { label: 'Perkecil', accelerator: 'CmdOrCtrl+-', click: () => commands.zoom(-1) },
-        { label: 'Ukuran Asli', accelerator: 'CmdOrCtrl+0', click: () => commands.zoom(0) },
-        { label: 'Unduhan', accelerator: 'CmdOrCtrl+Shift+J', click: send('toggle-downloads') },
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => commands.zoom(1) },
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => commands.zoom(1) },
+        { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => commands.zoom(-1) },
+        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => commands.zoom(0) },
+        { label: 'Downloads', accelerator: 'CmdOrCtrl+Shift+J', click: send('toggle-downloads') },
         { type: 'separator' },
-        { label: 'Muat Ulang', accelerator: 'CmdOrCtrl+R', click: commands.reload },
-        { label: 'Kembali', accelerator: 'CmdOrCtrl+[', click: commands.back },
-        { label: 'Maju', accelerator: 'CmdOrCtrl+]', click: commands.forward },
+        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: commands.reload },
+        { label: 'Back', accelerator: 'CmdOrCtrl+[', click: commands.back },
+        { label: 'Forward', accelerator: 'CmdOrCtrl+]', click: commands.forward },
         { label: 'History', accelerator: 'CmdOrCtrl+Y', click: send('toggle-history') },
-        { label: 'Bookmark Halaman Ini', accelerator: 'CmdOrCtrl+D', click: send('bookmark-current') },
-        { label: 'Bookmark', accelerator: 'CmdOrCtrl+Alt+B', click: send('toggle-bookmarks') },
-        { label: 'Tampilkan/Sembunyikan Bookmark Bar', accelerator: 'CmdOrCtrl+Shift+B', click: () => commands.bookmarkBarToggle() },
-        { label: 'Import dari Chrome/Brave…', click: send('open-import') },
-        { label: 'Tampilkan/Sembunyikan Sidebar', accelerator: 'CmdOrCtrl+S', click: () => commands.sidebarToggle() },
+        { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: send('bookmark-current') },
+        { label: 'Bookmarks', accelerator: 'CmdOrCtrl+Alt+B', click: send('toggle-bookmarks') },
+        { label: 'Show/Hide Bookmark Bar', accelerator: 'CmdOrCtrl+Shift+B', click: () => commands.bookmarkBarToggle() },
+        { label: 'Import from Chrome/Brave…', click: send('open-import') },
+        { label: 'Show/Hide Sidebar', accelerator: 'CmdOrCtrl+S', click: () => commands.sidebarToggle() },
         { type: 'separator' },
-        { label: 'Workspace Berikutnya', accelerator: 'CmdOrCtrl+Alt+Right', click: () => commands.wsStep(1) },
-        { label: 'Workspace Sebelumnya', accelerator: 'CmdOrCtrl+Alt+Left', click: () => commands.wsStep(-1) },
+        { label: 'Next Workspace', accelerator: 'CmdOrCtrl+Alt+Right', click: () => commands.wsStep(1) },
+        { label: 'Previous Workspace', accelerator: 'CmdOrCtrl+Alt+Left', click: () => commands.wsStep(-1) },
         { type: 'separator' },
-        { label: 'Cari Password (Keychain)', accelerator: 'CmdOrCtrl+Shift+P', click: () => commands.passwords() },
-        { label: 'DevTools Halaman', accelerator: 'CmdOrCtrl+Alt+I', click: () => activeTab()?.view?.webContents.toggleDevTools() },
+        { label: 'Find Password (Keychain)', accelerator: 'CmdOrCtrl+Shift+P', click: () => commands.passwords() },
+        { label: 'Radio Widget', accelerator: 'CmdOrCtrl+Shift+M', click: () => toggleMusic() },
+        { label: 'Picture in Picture', accelerator: 'CmdOrCtrl+Alt+P', click: () => commands.pip() },
+        { label: 'Page DevTools', accelerator: 'CmdOrCtrl+Alt+I', click: () => activeTab()?.view?.webContents.toggleDevTools() },
       ],
     },
     { role: 'editMenu' },
@@ -1081,6 +1259,7 @@ function buildMenu() {
 
 app.whenReady().then(async () => {
   load()
+  applyDns()
   nativeTheme.themeSource = state.theme
   try {
     // Daftar filter yang sama dipakai Ghostery/uBlock (EasyList, EasyPrivacy, dll), di-cache ke disk
@@ -1108,7 +1287,14 @@ app.whenReady().then(async () => {
     }, url, msg)
     blocker.on('request-blocked', req => {
       const t = state.tabs.find(t => t.view?.webContents.id === req.tabId)
-      if (t) { t.blocked++; render() }
+      // hitung URL unik per halaman: beberapa skrip iklan mengulang request yang diblokir ribuan kali per detik
+      if (!t || t.blockedSeen?.has(req.url)) return
+      ;(t.blockedSeen ||= new Set()).add(req.url)
+      t.blocked++
+      render()
+      const k = dayKey()
+      state.stats[k] = (state.stats[k] || 0) + 1
+      if (Object.keys(state.stats).length > 60) delete state.stats[Object.keys(state.stats).sort()[0]] // simpan ~2 bulan
     })
   } catch (e) {
     console.error('adblock gagal dimuat (offline?):', e.message)
@@ -1136,16 +1322,25 @@ app.whenReady().then(async () => {
     if (cursorX < sideSpace() + GAP || peeking) commands.wsStep(dir === 'left' ? 1 : -1) // hanya saat kursor di sidebar
   })
   buildMenu()
+  // jendela UI punya preload (window.almac): jangan pernah memuat situs luar di sini (mis. link di-drag ke sidebar)
+  win.webContents.on('will-navigate', e => e.preventDefault())
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   await win.loadFile(path.join(__dirname, 'ui', 'index.html'))
   commands.switchProfile(state.activeProfile)
+  if (state.music?.on) toggleMusic()
 
   setInterval(() => {
     if (!win) return
     const now = Date.now()
     for (const t of state.tabs) {
       // hemat memori: tab tidak aktif (tidak tampil, tidak bersuara) ditidurkan setelah state.sleepAfter menit
-      if (state.sleepAfter && t.view && !isShown(t) && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !t.view.webContents.isCurrentlyAudible()) sleep(t)
+      if (state.sleepAfter && t.view && !isShown(t) && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !t.view.webContents.isCurrentlyAudible() && t !== musicTab) sleep(t)
     }
+    if (state.focus.until && !focusOn()) { state.focus.until = 0; win.webContents.send('toast', 'Focus session finished. Nice work!') }
+    // sesi privat dihapus otomatis kalau tidak dipakai selama privateWipeAfter menit
+    const priv = state.profiles.find(p => p.ephemeral)
+    if (priv && state.activeProfile === priv.id) privSeen = now
+    else if (priv && state.privateWipeAfter && now - privSeen > state.privateWipeAfter * 60000) { const back = state.activeProfile; commands.closePrivate(); commands.switchProfile(back) }
     render()
   }, 60 * 1000)
 })
