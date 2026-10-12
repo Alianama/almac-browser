@@ -663,3 +663,9 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 .stats-bars .bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
 .stats-bars .bar i { width: 100%; min-height: 2px; background: var(--accent); border: var(--bw) solid var(--border); box-shadow: 2px 2px 0 var(--shadow); }
 .stats-bars small { font-size: 10px; color: var(--muted); }
+
+/* Almac Passwords */
+.pw-list { max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.pw-row { cursor: pointer; }
+.pw-row .fav-img { width: 16px; height: 16px; flex: none; }
+#pwBtn.locked .wsi { opacity: .6; }

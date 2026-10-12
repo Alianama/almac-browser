@@ -1,10 +1,12 @@
-const { app, BrowserWindow, WebContentsView, session, ipcMain, Menu, nativeTheme, dialog, clipboard, shell, screen } = require('electron')
+const { app, BrowserWindow, WebContentsView, session, ipcMain, Menu, nativeTheme, dialog, clipboard, shell, screen, safeStorage, systemPreferences, powerMonitor } = require('electron')
+const crypto = require('crypto')
 const path = require('path')
 const fs = require('fs')
 const { ElectronChromeExtensions } = require('electron-chrome-extensions')
 const { installChromeWebStore, uninstallExtension } = require('electron-chrome-web-store')
 const { ElectronBlocker } = require('@ghostery/adblocker-electron')
 const { getDomain } = require('tldts-experimental')
+const passwords = require('./passwords')
 
 app.setName('Almac Browser')
 app.setAboutPanelOptions({ applicationName: 'Almac Browser', applicationVersion: app.getVersion(), iconPath: path.join(__dirname, 'build', 'icon.png') })
@@ -53,7 +55,7 @@ process.on('uncaughtException', e => {
 })
 
 let win, blocker
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -95,6 +97,49 @@ const thirdParty = d => {
   return (getDomain(hostOf(d.url)) || hostOf(d.url)) !== (getDomain(hostOf(top)) || hostOf(top))
 }
 const dropCookies = d => state.cookiePolicy === 'block_all' || (state.cookiePolicy === 'block_third_party' && thirdParty(d))
+// ---- Almac Passwords: brankas terenkripsi (lihat passwords.js), satu untuk semua profil seperti Keychain ----
+const vault = passwords.createVault(path.join(DATA, 'passwords.vault'))
+const TOUCH_FILE = path.join(DATA, 'passwords.touchid') // kunci brankas, dienkripsi safeStorage (kunci di Keychain macOS)
+let pwLastUse = 0
+const pwTouch = () => { pwLastUse = Date.now() }
+// origin yang sama dianggap sama dengan/tanpa www (seperti Keychain); subdomain lain tidak (mis. user.github.io)
+const pwOrigin = url => { try { const u = new URL(url); return u.protocol + '//' + u.host.replace(/^www\./, '') } catch { return '' } }
+const pwPublic = e => ({ id: e.id, origin: e.origin, host: new URL(e.origin).host, username: e.username, title: e.title || '', notes: e.notes || '', hasOtp: !!e.otp, updated: e.updated })
+function pwLock() {
+  if (!vault.unlocked()) return
+  vault.lock()
+  render()
+}
+function pwAfterUnlock() {
+  pwTouch()
+  if (state.pwTouchId && safeStorage.isEncryptionAvailable()) fs.writeFileSync(TOUCH_FILE, safeStorage.encryptString(vault.key().toString('base64')), { mode: 0o600 })
+  render(true)
+}
+function pwUpsert({ id, url, origin, username = '', password, title, notes, otp }) {
+  origin = pwOrigin(origin || url)
+  if (!origin || !password) throw new Error('URL and password are required')
+  const list = vault.data.entries
+  const e = (id && list.find(e => e.id === id)) || list.find(e => e.origin === origin && e.username === username)
+  const fields = { origin, username, password, ...(title !== undefined && { title }), ...(notes !== undefined && { notes }), ...(otp !== undefined && { otp }), updated: Date.now() }
+  e ? Object.assign(e, fields) : list.push({ id: uid('k'), created: Date.now(), ...fields })
+}
+const pendingPw = new Map() // id -> {origin, username, password} menunggu jawaban user
+let pwSeq = 0
+function pwOffer(t) {
+  const c = t.pendingPw
+  t.pendingPw = null
+  if (!c || Date.now() - c.ts > 60000 || !win) return
+  if (vault.unlocked()) {
+    if (vault.data.never.includes(c.origin)) return
+    const same = vault.data.entries.find(e => e.origin === c.origin && e.username === c.username)
+    if (same?.password === c.password) return
+    c.update = !!same
+  }
+  const id = ++pwSeq
+  pendingPw.set(id, c)
+  win.webContents.send('pw-save', { id, host: new URL(c.origin).host, username: c.username, update: !!c.update })
+}
+
 // DNS-over-HTTPS berlaku untuk seluruh app (Chromium: satu resolver untuk semua sesi)
 function applyDns() {
   const url = /^https:\/\//.test(state.customDns || '') ? state.customDns : ''
@@ -342,6 +387,7 @@ function flush() {
     canReopen: closedTabs.length > 0,
     allSleeping: !state.tabs.some(t => t.view),
     blockedToday: state.stats[dayKey()] || 0,
+    pw: { setup: vault.exists(), unlocked: vault.unlocked(), touchId: state.pwTouchId && fs.existsSync(TOUCH_FILE), canTouchId: process.platform === 'darwin' && systemPreferences.canPromptTouchID?.() && safeStorage.isEncryptionAvailable(), lockAfter: state.pwLockAfter },
   })
   // profil privat tidak pernah ditulis ke disk
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
@@ -369,6 +415,7 @@ function profileCtx(profileId) {
   ses.setUserAgent(UA)
   ses.setSpellCheckerEnabled(false)
   ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'media-preload.js') }) // widget musik
+  if (!profileOf(profileId)?.ephemeral) ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'password-preload.js') }) // privat: tanpa autofill/simpan
   // navigasi + XHR/fetch: login Google = UA dengan token Electron (Client Hints asli tetap dikirim);
   // situs lain tidak diubah, kecuali dipastikan kembali ke UA Chrome setelah keluar dari halaman login
   // + Do Not Track / Global Privacy Control, + kebijakan cookie (header Cookie dibuang)
@@ -547,8 +594,8 @@ function wake(t) {
   wc.on('found-in-page', (_, r) => { if (t === activeTab()) win?.webContents.send('find-result', { active: r.activeMatchOrdinal, matches: r.matches }) })
   // zoom per situs: terapkan zoom tersimpan setiap pindah halaman
   wc.on('did-navigate', () => { const z = state.zoom[hostOf(wc.getURL())]; if (z && z !== 1) wc.setZoomFactor(z) })
-  wc.on('did-navigate', () => { t.blockedSeen = null; sync(true) })
-  wc.on('did-navigate-in-page', (_, url, isMainFrame) => { if (isMainFrame) sync(true) })
+  wc.on('did-navigate', () => { t.blockedSeen = null; sync(true); if (t.pendingPw) setTimeout(() => pwOffer(t), 600) })
+  wc.on('did-navigate-in-page', (_, url, isMainFrame) => { if (isMainFrame) { sync(true); if (t.pendingPw) setTimeout(() => pwOffer(t), 600) } })
   wc.on('page-title-updated', () => sync(false))
   wc.on('page-favicon-updated', (_, icons) => {
     t.favicon = icons[0]
@@ -723,6 +770,7 @@ const commands = {
     if (key === 'cookiePolicy' && ['allow', 'block_third_party', 'block_all'].includes(value)) state.cookiePolicy = value
     if (key === 'doNotTrack') state.doNotTrack = !!value
     if (key === 'httpsOnly') state.httpsOnly = !!value
+    if (key === 'pwLockAfter' && [1, 5, 15, 60].includes(value)) state.pwLockAfter = value
     if (key === 'stripTracking') state.stripTracking = !!value
     if (key === 'privateWipeAfter' && [0, 15, 30, 60].includes(value)) state.privateWipeAfter = value
     if (key === 'focusSites' && Array.isArray(value)) state.focus.sites = [...new Set(value.map(s => String(s).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')).filter(Boolean))].slice(0, 100)
@@ -976,6 +1024,16 @@ const commands = {
   webStore: () => newTab('https://chromewebstore.google.com/'),
   music: () => toggleMusic(),
   // iCloud Keychain tidak bisa diakses browser non-resmi -> salin domain & buka app Passwords untuk dicari
+  pwAnswer: ({ id, action }) => {
+    const c = pendingPw.get(id)
+    pendingPw.delete(id)
+    if (!c || !vault.unlocked()) return
+    if (action === 'never') { if (!vault.data.never.includes(c.origin)) vault.data.never.push(c.origin) }
+    else if (action === 'save') pwUpsert(c)
+    else return
+    vault.save(); pwTouch()
+  },
+  pwLock,
   passwords: () => {
     try { clipboard.writeText(new URL(activeTab()?.url).hostname.replace(/^www\./, '')) } catch {}
     shell.openPath('/System/Applications/Passwords.app')
@@ -1140,7 +1198,109 @@ queries.siteInfo = async () => {
     cookies: cookies.length, blocked: t.blocked, perms: sitePermsOf(t.profileId, u.origin),
   }
 }
+// ---- Almac Passwords: perintah dari UI ----
+const needVault = fn => (...a) => { if (!vault.unlocked()) throw new Error('Passwords are locked'); pwTouch(); return fn(...a) }
+Object.assign(queries, {
+  pwSetup: password => {
+    if (typeof password !== 'string' || password.length < 8) throw new Error('Master password must be at least 8 characters')
+    vault.setup(password); pwAfterUnlock(); return true
+  },
+  pwUnlock: password => { const ok = typeof password === 'string' && vault.unlock(password); if (ok) pwAfterUnlock(); return ok },
+  pwUnlockTouch: async () => {
+    if (!fs.existsSync(TOUCH_FILE)) return false
+    try { await systemPreferences.promptTouchID('unlock Almac Passwords') } catch { return false }
+    try { if (vault.unlockWithKey(Buffer.from(safeStorage.decryptString(fs.readFileSync(TOUCH_FILE)), 'base64'))) { pwAfterUnlock(); return true } } catch {}
+    fs.rmSync(TOUCH_FILE, { force: true }) // kunci lama (master diganti / Keychain menolak) -> kembali ke master password
+    render(); return false
+  },
+  pwTouchId: on => {
+    state.pwTouchId = !!on
+    if (!on) fs.rmSync(TOUCH_FILE, { force: true }); else if (vault.unlocked()) pwAfterUnlock()
+    render(true); return state.pwTouchId
+  },
+  pwChange: ({ oldPassword, newPassword }) => {
+    if (typeof newPassword !== 'string' || newPassword.length < 8) throw new Error('Master password must be at least 8 characters')
+    if (!vault.changePassword(oldPassword, newPassword)) return false
+    pwAfterUnlock(); return true
+  },
+  pwList: needVault((q = '') => {
+    q = q.trim().toLowerCase()
+    return vault.data.entries.filter(e => !q || (e.origin + ' ' + e.username + ' ' + (e.title || '')).toLowerCase().includes(q))
+      .sort((a, b) => a.origin.localeCompare(b.origin) || a.username.localeCompare(b.username)).map(pwPublic)
+  }),
+  pwNever: needVault(() => vault.data.never.slice().sort()),
+  pwNeverRemove: needVault(origin => { vault.data.never = vault.data.never.filter(o => o !== origin); vault.save() }),
+  pwReveal: needVault(id => vault.data.entries.find(e => e.id === id)?.password ?? null),
+  pwCopy: needVault(({ id, field }) => {
+    const e = vault.data.entries.find(e => e.id === id)
+    if (!e) return false
+    const v = field === 'username' ? e.username : e.password
+    clipboard.writeText(v)
+    // password di clipboard dihapus setelah 30 detik (kalau belum diganti user)
+    if (field !== 'username') setTimeout(() => { if (clipboard.readText() === v) clipboard.clear() }, 30000)
+    return true
+  }),
+  pwSave: needVault(entry => { pwUpsert(entry); vault.save(); return true }),
+  pwDelete: needVault(id => { vault.data.entries = vault.data.entries.filter(e => e.id !== id); vault.save(); return true }),
+  pwGenerate: () => passwords.generate(),
+  // import CSV dari Apple Passwords (File > Export Passwords) / Chrome / Brave / Edge
+  pwImport: needVault(async () => {
+    const r = await dialog.showOpenDialog(win, { title: 'Import passwords (CSV)', filters: [{ name: 'CSV', extensions: ['csv'] }], properties: ['openFile'] })
+    if (r.canceled) return null
+    const rows = passwords.parseCsv(fs.readFileSync(r.filePaths[0], 'utf8'))
+    let added = 0, updated = 0
+    for (const row of rows) {
+      const origin = pwOrigin(/^[a-z]+:\/\//i.test(row.url) ? row.url : 'https://' + row.url)
+      if (!origin) continue
+      const same = vault.data.entries.find(e => e.origin === origin && e.username === row.username)
+      if (same?.password === row.password) continue
+      same ? updated++ : added++
+      pwUpsert({ origin, username: row.username, password: row.password, title: row.title, notes: row.notes, otp: row.otp })
+    }
+    vault.save()
+    return { added, updated, total: rows.length }
+  }),
+  // ekspor = file teks biasa (format Apple Passwords) -> wajib master password lagi
+  pwExport: async password => {
+    if (!vault.unlocked() || !vault.unlock(password)) return false
+    const r = await dialog.showSaveDialog(win, { title: 'Export passwords (CSV)', defaultPath: path.join(app.getPath('downloads'), 'Almac Passwords.csv'), filters: [{ name: 'CSV', extensions: ['csv'] }] })
+    if (r.canceled) return null
+    fs.writeFileSync(r.filePath, passwords.toCsv(vault.data.entries), { mode: 0o600 })
+    pwTouch()
+    return vault.data.entries.length
+  },
+})
 ipcMain.handle('ask', (e, type, arg) => fromUI(e) ? queries[type]?.(arg) : null)
+
+// ---- Almac Passwords: dari halaman web (password-preload.js) ----
+// origin diambil dari frame pengirim (bukan dari halaman); hanya frame utama tab Almac, profil non-privat, https/localhost
+ipcMain.handle('pw', (e, type, arg) => {
+  const t = state.tabs.find(t => t.view?.webContents === e.sender)
+  const frame = e.senderFrame
+  if (!t || !frame || frame !== e.sender.mainFrame || profileOf(t.profileId)?.ephemeral) return null
+  const u = new URL(frame.url)
+  if (u.protocol !== 'https:' && u.hostname !== 'localhost') return null
+  const origin = pwOrigin(frame.url)
+  const mine = () => vault.data.entries.filter(x => x.origin === origin)
+  if (type === 'query') {
+    if (!vault.unlocked()) return { locked: true, setup: vault.exists() }
+    return { locked: false, logins: mine().map(x => ({ id: x.id, username: x.username })) }
+  }
+  if (type === 'fill') {
+    const x = vault.unlocked() && mine().find(x => x.id === arg)
+    if (!x) return null
+    pwTouch()
+    return { username: x.username, password: x.password }
+  }
+  if (type === 'unlock') { if (t === activeTab()) win?.webContents.send('pw-unlock'); return null }
+  if (type === 'generate') return passwords.generate()
+  if (type === 'capture') {
+    const username = String(arg?.username || '').slice(0, 500), password = String(arg?.password || '')
+    if (!password || password.length > 1000) return null
+    t.pendingPw = { origin, username, password, ts: Date.now() } // ditawarkan setelah halaman pindah (login berhasil)
+  }
+  return null
+})
 
 // ---- widget musik: radio retro pixel melayang yang mengontrol tab musik di Almac (default YouTube Music; situs lain juga bisa) ----
 // Spotify Web tidak bisa diputar: Electron standar tidak punya Widevine DRM.
@@ -1165,25 +1325,59 @@ const MEDIA = {
   play: t => mediaJs(t.view.webContents.isCurrentlyAudible() ? 'pause' : 'play', 'v.paused ? v.play() : v.pause()'),
   next: () => mediaJs('nexttrack', 'v.currentTime = v.duration || 0'),
   prev: () => mediaJs('previoustrack', 'v.currentTime = 0'),
-  volUp: () => mediaJs('-', 'v.volume = Math.min(1, v.volume + .1)'),
-  volDown: () => mediaJs('-', 'v.volume = Math.max(0, v.volume - .1)'),
+  volUp: () => volJs(10),
+  volDown: () => volJs(-10),
 }
-const MEDIA_INFO = `(() => {
-  const m = navigator.mediaSession?.metadata
-  return { title: m?.title || document.title, artist: m?.artist || '', art: m?.artwork?.at(-1)?.src || '' }
+// volume: player YouTube/YouTube Music (slider-nya ikut berubah), selain itu elemen media pertama
+const volJs = d => `(() => {
+  const p = document.getElementById('movie_player')
+  if (p?.setVolume) { p.setVolume(Math.max(0, Math.min(100, p.getVolume() + ${d}))); if (p.isMuted?.()) p.unMute(); return }
+  const v = [...document.querySelectorAll('video, audio')].find(v => v.currentSrc)
+  if (v) v.volume = Math.max(0, Math.min(1, v.volume + ${d / 100}))
 })()`
+const MEDIA_INFO = `(() => {
+  const m = navigator.mediaSession?.metadata, p = document.getElementById('movie_player')
+  const v = [...document.querySelectorAll('video, audio')].find(v => v.currentSrc)
+  return { title: m?.title || document.title, artist: m?.artist || '', art: m?.artwork?.at(-1)?.src || '',
+    volume: p?.getVolume ? (p.isMuted?.() ? 0 : p.getVolume()) : v ? Math.round(v.muted ? 0 : v.volume * 100) : null }
+})()`
+// daftar lagu: antrean YouTube Music, atau panel playlist YouTube
+const QUEUE_SEL = JSON.stringify('ytmusic-player-queue #contents > ytmusic-player-queue-item, ytd-playlist-panel-renderer #items > ytd-playlist-panel-video-renderer')
+const TRACKS_JS = `[...document.querySelectorAll(${QUEUE_SEL})].slice(0, 200).map(e => ({
+  title: (e.querySelector('.song-title, #video-title')?.textContent || '').trim(),
+  artist: (e.querySelector('.byline, #byline')?.textContent || '').trim(),
+  now: e.hasAttribute('selected'),
+}))`
+const pickJs = i => `(() => {
+  const e = document.querySelectorAll(${QUEUE_SEL})[${i}]
+  if (e) (e.querySelector('ytmusic-play-button-renderer, a#wc-endpoint') || e).click()
+})()`
+const LIST_H = 214 // tinggi panel daftar lagu di atas radio
 ipcMain.handle('music', async (e, cmd) => {
   if (e.sender !== musicWin?.webContents) return null
   if (cmd === 'close') return toggleMusic()
+  if (cmd === 'list' || cmd === 'unlist') { musicList(cmd === 'list'); return null }
   let t = liveMusicTab()
   if (cmd === 'open') { t ? selectTab(t) : newTab(MUSIC_HOME); return null }
   if (!t) return { state: 'off' }
   if (!t.view) wake(t)
   const wc = t.view.webContents
   if (MEDIA[cmd]) await wc.executeJavaScript(MEDIA[cmd](t), true).catch(() => {})
+  if (Number.isInteger(cmd?.pick) && cmd.pick >= 0) { await wc.executeJavaScript(pickJs(cmd.pick), true).catch(() => {}); await new Promise(r => setTimeout(r, 700)) }
   const info = await wc.executeJavaScript(MEDIA_INFO).catch(() => ({ title: t.title }))
-  return { state: wc.isCurrentlyAudible() ? 'playing' : 'paused', title: String(info.title || ''), artist: String(info.artist || ''), art: /^https:/.test(info.art) ? info.art : '' }
+  const tracks = cmd === 'tracks' || cmd?.pick !== undefined ? await wc.executeJavaScript(TRACKS_JS).catch(() => []) : undefined
+  return {
+    state: wc.isCurrentlyAudible() ? 'playing' : 'paused', title: String(info.title || ''), artist: String(info.artist || ''), art: /^https:/.test(info.art) ? info.art : '',
+    volume: Number.isFinite(info.volume) ? info.volume : null,
+    ...(tracks && { tracks: tracks.map(x => ({ title: String(x.title).slice(0, 200), artist: String(x.artist).slice(0, 200), now: !!x.now })) }),
+  }
 })
+function musicList(open) {
+  if (!musicWin || !!musicWin.listOpen === open) return
+  musicWin.listOpen = open
+  const b = musicWin.getBounds(), d = open ? LIST_H : -LIST_H
+  musicWin.setBounds({ x: b.x, y: b.y - d, width: b.width, height: b.height + d })
+}
 function toggleMusic() {
   if (musicWin) { state.music = { ...state.music, on: false }; musicWin.close(); return }
   const b = win.getBounds()
@@ -1197,7 +1391,8 @@ function toggleMusic() {
   })
   musicWin.webContents.on('will-navigate', e => e.preventDefault())
   musicWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  musicWin.on('moved', () => { const [x, y] = musicWin.getPosition(); state.music = { x, y, on: true }; render() })
+  // posisi tersimpan = posisi radio (panel daftar lagu tumbuh ke atas)
+  musicWin.on('moved', () => { const [x, y] = musicWin.getPosition(); state.music = { x, y: y + (musicWin.listOpen ? LIST_H : 0), on: true }; render() })
   musicWin.on('closed', () => { musicWin = null; render() })
   musicWin.loadFile(path.join(__dirname, 'ui', 'music.html'))
   render()
@@ -1246,7 +1441,8 @@ function buildMenu() {
         { label: 'Next Workspace', accelerator: 'CmdOrCtrl+Alt+Right', click: () => commands.wsStep(1) },
         { label: 'Previous Workspace', accelerator: 'CmdOrCtrl+Alt+Left', click: () => commands.wsStep(-1) },
         { type: 'separator' },
-        { label: 'Find Password (Keychain)', accelerator: 'CmdOrCtrl+Shift+P', click: () => commands.passwords() },
+        { label: 'Passwords', accelerator: 'CmdOrCtrl+Shift+P', click: send('open-passwords') },
+        { label: 'Find Password in Keychain', click: () => commands.passwords() },
         { label: 'Radio Widget', accelerator: 'CmdOrCtrl+Shift+M', click: () => toggleMusic() },
         { label: 'Picture in Picture', accelerator: 'CmdOrCtrl+Alt+P', click: () => commands.pip() },
         { label: 'Page DevTools', accelerator: 'CmdOrCtrl+Alt+I', click: () => activeTab()?.view?.webContents.toggleDevTools() },
@@ -1322,6 +1518,7 @@ app.whenReady().then(async () => {
     if (cursorX < sideSpace() + GAP || peeking) commands.wsStep(dir === 'left' ? 1 : -1) // hanya saat kursor di sidebar
   })
   buildMenu()
+  for (const ev of ['lock-screen', 'suspend']) powerMonitor.on(ev, pwLock) // layar dikunci / sleep -> brankas dikunci
   // jendela UI punya preload (window.almac): jangan pernah memuat situs luar di sini (mis. link di-drag ke sidebar)
   win.webContents.on('will-navigate', e => e.preventDefault())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -1336,6 +1533,7 @@ app.whenReady().then(async () => {
       // hemat memori: tab tidak aktif (tidak tampil, tidak bersuara) ditidurkan setelah state.sleepAfter menit
       if (state.sleepAfter && t.view && !isShown(t) && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !t.view.webContents.isCurrentlyAudible() && t !== musicTab) sleep(t)
     }
+    if (vault.unlocked() && now - pwLastUse > state.pwLockAfter * 60000) pwLock()
     if (state.focus.until && !focusOn()) { state.focus.until = 0; win.webContents.send('toast', 'Focus session finished. Nice work!') }
     // sesi privat dihapus otomatis kalau tidak dipakai selama privateWipeAfter menit
     const priv = state.profiles.find(p => p.ephemeral)

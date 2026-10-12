@@ -54,7 +54,7 @@
       <div class="profiles-row"><div id="profiles"></div><button id="settingsBtn" class="mini" type="button" title="Settings (⌘,)" data-icon="gear"></button></div>
       <div class="status">
         <div class="chip" id="shield" title="Ads & trackers blocked in this tab — click for weekly stats"><span data-icon="shield"></span><b id="blocked">0</b></div>
-        <button data-cmd="passwords" title="Find password in Keychain (⌘⇧P): domain is copied, paste it in Passwords" data-icon="key"></button>
+        <button id="pwBtn" title="Almac Passwords (⌘⇧P)" data-icon="key"></button>
         <button id="historyBtn" title="History & Bookmarks (⌘Y)" data-icon="clock"></button>
         <button data-cmd="music" id="musicBtn" title="Radio widget (⌘⇧M)" data-icon="radio"></button>
         <button data-cmd="theme" id="themeBtn" title="Theme"></button>
@@ -1385,7 +1385,9 @@ function openSettings(initialTab = 'general') {
         ),
         el('div', { className: 'row' },
           el('span', { textContent: 'Saved passwords' }),
-          el('button', { type: 'button', onclick: () => almac.cmd('passwords') }, iconEl('key'), 'Open Passwords.app (iCloud Keychain)'),
+          el('div', { className: 'inline' },
+            el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(openPasswords, 80) } }, iconEl('key'), 'Almac Passwords'),
+            el('button', { type: 'button', onclick: () => almac.cmd('passwords') }, iconEl('external'), 'Passwords.app (iCloud Keychain)')),
         ),
         ...(s.profiles.length > 1 ? [
           el('div', { className: 'row danger-zone' },
@@ -1508,7 +1510,9 @@ const PALETTE_CMDS = [
   ['Toggle bookmark bar', 'bookmark', () => almac.cmd('bookmarkBarToggle'), '⌘⇧B'],
   ['Change theme', 'dark', () => almac.cmd('theme')],
   ['Radio widget', 'radio', () => almac.cmd('music'), '⌘⇧M'],
-  ['Find password (Keychain)', 'key', () => almac.cmd('passwords'), '⌘⇧P'],
+  ['Passwords', 'key', () => setTimeout(openPasswords, 80), '⌘⇧P'],
+  ['Lock passwords', 'lock', () => almac.cmd('pwLock')],
+  ['Find password in Keychain', 'external', () => almac.cmd('passwords')],
   ['Import from Chrome/Brave', 'download', () => setTimeout(openImport, 80)],
   ['Chrome Web Store', 'ext', () => almac.cmd('webStore')],
 ]
@@ -1588,6 +1592,158 @@ async function openStats() {
 }
 $('#pet').addEventListener('click', openStats)
 $('#shield').addEventListener('click', openStats)
+
+// ---- Almac Passwords ----
+// brankas terenkripsi (AES-256-GCM, master password) seperti Almac Remote; UI tidak pernah menyimpan password,
+// hanya meminta ke main saat ditampilkan/disalin
+const askErr = async (type, arg) => { try { return await almac.ask(type, arg) } catch (e) { return { error: e.message.replace(/^Error invoking remote method 'ask': (Error: )?/, '') } } }
+const pwField = (placeholder, value = '') => el('input', { className: 'field', type: 'password', placeholder, value, autocomplete: 'off', spellcheck: false })
+
+// setup / buka kunci; resolve true kalau brankas terbuka
+function pwUnlockModal(reason = '') {
+  return new Promise(resolve => {
+    let ok = false
+    const s = lastState.pw
+    const err = el('p', { className: 'modal-text error' })
+    const finish = () => { ok = true; closeModal() }
+    if (!s.setup) {
+      const a = pwField('Master password (min. 8 characters)'), b = pwField('Repeat master password')
+      openModal('Set up Almac Passwords', [
+        el('p', { className: 'modal-text', textContent: (reason ? reason + ' ' : '') + 'Your passwords are encrypted on this Mac with AES-256-GCM using a key derived from your master password. Nobody, including Almac, can recover it if you forget it.' }),
+        a, b, err,
+      ], [{ label: 'Cancel' }, { label: 'Create', primary: true, onClick: () => {
+        if (a.value.length < 8) { err.textContent = 'Use at least 8 characters.'; return false }
+        if (a.value !== b.value) { err.textContent = 'Passwords do not match.'; return false }
+        askErr('pwSetup', a.value).then(r => r?.error ? (err.textContent = r.error) : finish())
+        return false
+      } }], () => resolve(ok))
+      return
+    }
+    const pw = pwField('Master password')
+    const touch = s.touchId ? el('button', { type: 'button', onclick: async () => { if (await almac.ask('pwUnlockTouch')) finish(); else err.textContent = 'Touch ID failed. Use your master password.' } }, iconEl('user'), 'Touch ID') : ''
+    openModal('Unlock Almac Passwords', [
+      ...(reason ? [el('p', { className: 'modal-text', textContent: reason })] : []),
+      el('div', { className: 'inline' }, pw, touch), err,
+    ], [{ label: 'Cancel' }, { label: 'Unlock', primary: true, onClick: () => {
+      err.textContent = 'Checking…'
+      almac.ask('pwUnlock', pw.value).then(r => { if (r) finish(); else { err.textContent = 'Wrong master password.'; pw.select() } })
+      return false
+    } }], () => resolve(ok))
+    if (s.touchId) touch.click() // langsung tawarkan Touch ID seperti Keychain
+  })
+}
+const pwReady = async reason => lastState.pw.unlocked || await pwUnlockModal(reason)
+
+async function openPasswords(q = '') {
+  if (!await pwReady()) return
+  const list = el('div', { className: 'pw-list' })
+  const search = el('input', { className: 'field', placeholder: 'Search sites or usernames', value: q, autocomplete: 'off' })
+  const draw = async () => {
+    const items = await askErr('pwList', search.value)
+    if (items.error) return closeModal()
+    list.replaceChildren(...(items.length ? items.map(e => el('div', { className: 'hrow pw-row', onclick: () => editPassword(e) },
+      el('img', { className: 'fav-img', src: lastState.favicons?.[e.host] || '', onerror() { this.replaceWith(iconEl('globe')) } }),
+      el('div', { className: 'meta' }, el('b', { textContent: e.title || e.host }), el('small', { textContent: e.username || '(no username)' })),
+      el('button', { type: 'button', className: 'mini', title: 'Copy username', onclick: ev => { ev.stopPropagation(); almac.ask('pwCopy', { id: e.id, field: 'username' }); toast('Username copied', 'copy') } }, iconEl('user')),
+      el('button', { type: 'button', className: 'mini', title: 'Copy password (cleared from clipboard after 30 s)', onclick: ev => { ev.stopPropagation(); almac.ask('pwCopy', { id: e.id }); toast('Password copied — clipboard clears in 30 s', 'key') } }, iconEl('copy'))))
+      : [el('p', { className: 'none', textContent: search.value ? 'No matches.' : 'No passwords yet. Sign in to a site and Almac will offer to save it, or import a CSV from Apple Passwords / Chrome.' })]))
+  }
+  let timer
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 100) }
+  const tools = el('div', { className: 'inline' },
+    el('button', { type: 'button', onclick: () => editPassword(null) }, iconEl('plus'), 'Add'),
+    el('button', { type: 'button', onclick: async () => {
+      const r = await askErr('pwImport')
+      if (r?.error) return toast('Import failed: ' + r.error, 'warn')
+      if (r) { toast(`Imported ${r.added} new, ${r.updated} updated`, 'download'); draw() }
+    } }, iconEl('download'), 'Import CSV'),
+    el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(exportPasswords, 80) } }, iconEl('file'), 'Export CSV'),
+    el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(passwordSettings, 80) } }, iconEl('gear'), 'Settings'),
+    el('button', { type: 'button', onclick: () => { almac.cmd('pwLock'); closeModal() } }, iconEl('lock'), 'Lock'))
+  await openModal('Passwords', [search, tools, list], [{ label: 'Done', primary: true }])
+  search.focus()
+  draw()
+}
+
+async function editPassword(e) {
+  const isNew = !e
+  const pw = pwField('Password')
+  if (!isNew) pw.value = await almac.ask('pwReveal', e.id) || ''
+  const site = el('input', { className: 'field', placeholder: 'https://example.com', value: e?.origin || '', spellcheck: false })
+  const user = el('input', { className: 'field', placeholder: 'Username or email', value: e?.username || '', spellcheck: false })
+  const notes = el('textarea', { className: 'field focus-sites', placeholder: 'Notes', value: e?.notes || '', rows: 3 })
+  const err = el('p', { className: 'modal-text error' })
+  const show = el('button', { type: 'button', className: 'mini', title: 'Show / hide', onclick: () => { pw.type = pw.type === 'password' ? 'text' : 'password' } }, iconEl('info'))
+  const gen = el('button', { type: 'button', className: 'mini', title: 'Generate strong password', onclick: async () => { pw.value = await almac.ask('pwGenerate'); pw.type = 'text' } }, iconEl('retry'))
+  openModal(isNew ? 'Add password' : (e.title || e.host), [
+    el('label', { className: 'row' }, el('span', { textContent: 'Website' }), site),
+    el('label', { className: 'row' }, el('span', { textContent: 'Username' }), user),
+    el('div', { className: 'row' }, el('span', { textContent: 'Password' }), el('div', { className: 'inline' }, pw, show, gen)),
+    el('label', { className: 'row' }, el('span', { textContent: 'Notes' }), notes),
+    ...(e?.hasOtp ? [el('p', { className: 'modal-text', textContent: 'Has a verification code (OTP) setup, kept for export.' })] : []),
+    ...(!isNew ? [twoStep('Delete password', 'Sure? Delete', () => { almac.ask('pwDelete', e.id); setTimeout(openPasswords, 120) })] : []),
+    err,
+  ], [{ label: 'Cancel', onClick: () => { setTimeout(openPasswords, 80) } }, { label: 'Save', primary: true, onClick: () => {
+    const url = /^[a-z]+:\/\//i.test(site.value.trim()) ? site.value.trim() : 'https://' + site.value.trim()
+    askErr('pwSave', { id: e?.id, url, username: user.value.trim(), password: pw.value, notes: notes.value }).then(r => {
+      if (r?.error) err.textContent = r.error; else { closeModal(); setTimeout(openPasswords, 80) }
+    })
+    return false
+  } }])
+}
+
+function exportPasswords() {
+  const pw = pwField('Master password')
+  const err = el('p', { className: 'modal-text error' })
+  openModal('Export passwords', [
+    el('p', { className: 'modal-text', textContent: 'The CSV uses the same format as Apple Passwords (File › Export Passwords) and can be imported into Passwords.app, Chrome, or another Almac. It is NOT encrypted: anyone with the file can read every password. Delete it after use.' }),
+    pw, err,
+  ], [{ label: 'Cancel' }, { label: 'Export', primary: true, danger: true, onClick: () => {
+    askErr('pwExport', pw.value).then(r => {
+      if (r === false) { err.textContent = 'Wrong master password.'; return }
+      closeModal()
+      if (r?.error) toast('Export failed: ' + r.error, 'warn'); else if (r !== null) toast(`Exported ${r} passwords`, 'file')
+    })
+    return false
+  } }])
+}
+
+function passwordSettings() {
+  const s = lastState.pw
+  const lockSeg = el('div', { className: 'seg' }, ...[[1, '1 min'], [5, '5 min'], [15, '15 min'], [60, '1 hour']].map(([v, t]) => el('button', {
+    type: 'button', className: v === s.lockAfter ? 'on ask' : '', textContent: t,
+    onclick() { almac.cmd('setting', { key: 'pwLockAfter', value: v }); lockSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
+  })))
+  const touch = el('input', { type: 'checkbox', checked: s.touchId, disabled: !s.canTouchId, onchange: () => almac.ask('pwTouchId', touch.checked) })
+  const oldPw = pwField('Current master password'), newPw = pwField('New master password (min. 8)'), msg = el('p', { className: 'modal-text' })
+  const never = el('div', { className: 'pw-list' })
+  askErr('pwNever').then(list => !list.error && never.replaceChildren(...list.map(o => el('div', { className: 'hrow' }, el('div', { className: 'meta' }, el('b', { textContent: o })),
+    el('button', { type: 'button', className: 'mini hx', title: 'Allow saving again', onclick() { almac.ask('pwNeverRemove', o); this.parentNode.remove() } }, iconEl('x'))))))
+  openModal('Password settings', [
+    el('div', { className: 'row' }, el('span', { textContent: 'Lock automatically after inactivity (also locks when the Mac sleeps or the screen locks)' }), lockSeg),
+    el('label', { className: 'check sett-row' }, touch, el('span', { textContent: s.canTouchId ? 'Unlock with Touch ID (key kept in macOS Keychain)' : 'Unlock with Touch ID (not available on this Mac)' })),
+    el('div', { className: 'row' }, el('span', { textContent: 'Change master password' }), oldPw, newPw,
+      el('button', { type: 'button', onclick: async () => { const r = await askErr('pwChange', { oldPassword: oldPw.value, newPassword: newPw.value }); msg.textContent = r?.error || (r ? 'Master password changed.' : 'Current master password is wrong.') } }, iconEl('check'), 'Change'), msg),
+    el('div', { className: 'row' }, el('span', { textContent: 'Never save on these sites' }), never),
+  ], [{ label: 'Back', onClick: () => { setTimeout(openPasswords, 80) } }, { label: 'Done', primary: true }])
+}
+
+// tawaran simpan setelah login (main menunggu halaman pindah dulu)
+almac.onPwSave(async ({ id, host, username, update }) => {
+  let deferred = false // Simpan/Jangan pernah: jawaban dikirim setelah brankas terbuka
+  const answer = action => almac.cmd('pwAnswer', { id, action })
+  openModal(update ? 'Update password?' : 'Save password?', [
+    el('p', { className: 'modal-text' }, el('b', { textContent: host }), ` · ${username || '(no username)'}`),
+    el('p', { className: 'modal-text', textContent: lastState.pw.unlocked ? 'Stored encrypted in Almac Passwords.' : lastState.pw.setup ? 'You will be asked for your master password.' : 'You will set up a master password first.' }),
+  ], [
+    { label: 'Never for this site', onClick: () => { deferred = true; closeModal(); pwReady().then(ok => answer(ok ? 'never' : 'skip')); return false } },
+    { label: 'Not now' },
+    { label: update ? 'Update' : 'Save', primary: true, onClick: () => { deferred = true; closeModal(); pwReady().then(ok => answer(ok ? 'save' : 'skip')); return false } },
+  ], () => { if (!deferred) answer('skip') })
+})
+almac.onPwUnlock(() => pwUnlockModal())
+almac.onOpenPasswords(() => openPasswords())
+$('#pwBtn').addEventListener('click', () => openPasswords())
 
 almac.cmd('ready')
 </script>

@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.1.0-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.2.0-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
@@ -42,11 +42,19 @@
 - **Private session auto-delete** after a chosen idle time
 - **Crashed tab recovery** — reload prompt instead of a blank page
 
+### 🔑 Almac Passwords
+- Built-in password manager: **AES-256-GCM** vault, key derived from your master password (PBKDF2-SHA256, 600k iterations). Same scheme as Almac Remote
+- Offers to save after a successful sign-in; autofill dropdown on login fields; strong password generator
+- **Touch ID unlock**, auto-lock after inactivity, sleep, or screen lock; copied passwords are cleared from the clipboard after 30 s
+- **Import / export CSV in Apple Passwords format** (`Title,URL,Username,Password,Notes,OTPAuth`), also reads Chrome/Brave/Edge exports
+- Private profiles never autofill or save
+
 ### ⚡ Productivity & Fun
 - **Command palette (⌘K)** — search tabs across workspaces, bookmarks, history and commands
 - **Reopen closed tab (⌘⇧T)** and **Picture-in-Picture (⌘⌥P)**
 - **Focus mode** — block distracting sites for 25/50/90 minutes
 - **Almi, the pixel pet** — eats blocked trackers, sleeps when your tabs sleep; click for weekly stats
+- **Radio widget (⌘⇧M)** — floating pixel radio controls YouTube Music from any page: tracklist to pick a song, animated volume
 
 ### 🔖 Profiles
 - Multiple **isolated profiles** — separate cookies, history, bookmarks, extensions

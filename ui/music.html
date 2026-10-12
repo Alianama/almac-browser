@@ -16,9 +16,9 @@
     }
     * { box-sizing: border-box; margin: 0; }
     html, body { height: 100%; overflow: hidden; background: transparent; user-select: none; }
-    body { padding: 18px 9px 9px 4px; font: 8px/1.2 'Silkscreen', ui-monospace, monospace; }
+    body { padding: 18px 9px 9px 4px; font: 8px/1.2 'Silkscreen', ui-monospace, monospace; display: flex; flex-direction: column; }
     .radio {
-      position: relative; height: 100%; display: grid; grid-template: 1fr 20px / 44px 1fr 26px; gap: 6px 7px; padding: 7px 8px;
+      position: relative; flex: none; height: 101px; display: grid; grid-template: 1fr 20px / 44px 1fr 26px; gap: 6px 7px; padding: 7px 8px;
       background: var(--body); border: 2px solid var(--ink); border-radius: 10px; box-shadow: 3px 3px 0 var(--ink);
       -webkit-app-region: drag; cursor: grab;
     }
@@ -73,18 +73,70 @@
     .keys { grid-column: 2; display: flex; gap: 3px; }
     .keys button { flex: 1; display: grid; place-items: center; background: var(--key); border-radius: 3px; box-shadow: 0 2px 0 var(--ink); }
     .keys [data-cmd=play] { flex: 1.4; background: var(--amber); }
+    .keys .on { background: var(--amber); }
+
+    /* volume: bar pixel di layar + speaker berdenyut + gelombang suara */
+    .vol { position: absolute; inset: 0; display: flex; align-items: center; gap: 5px; padding: 0 6px; background: var(--screen); opacity: 0; pointer-events: none; }
+    .vol.show { animation: vol-show 1.4s steps(1) forwards; }
+    @keyframes vol-show { 0%, 92% { opacity: 1; } 100% { opacity: 0; } }
+    .vol b { font-size: 8px; }
+    .bars { flex: 1; display: flex; align-items: flex-end; gap: 2px; height: 22px; }
+    .bars i { flex: 1; background: var(--amber-dim); height: calc(20% + var(--n) * 8%); }
+    .bars i.lit { background: var(--amber); }
+    .bars i.edge { animation: bar-pop .5s steps(3); }
+    @keyframes bar-pop { 0% { transform: scaleY(.2); background: #fff3c4; } 60% { transform: scaleY(1.25); } }
+    .vol .pct { width: 22px; text-align: right; font-size: 9px; }
+    .grille.boom { animation: boom .35s steps(3); }
+    .grille.hush { animation: hush .35s steps(3); }
+    @keyframes boom { 50% { transform: scale(1.12); background-size: 7.5px 7.5px; } }
+    @keyframes hush { 50% { transform: scale(.9); background-size: 4.5px 4.5px; } }
+    .wave { position: absolute; left: 50px; top: 50%; width: 8px; height: 8px; border: 2px solid var(--ink); border-left: 0; border-bottom-color: transparent; border-top-color: transparent;
+      opacity: 0; pointer-events: none; }
+    .wave.go { animation: wave .6s steps(4) forwards; }
+    .wave.w2.go { animation-delay: .12s; }
+    @keyframes wave { 0% { opacity: 1; transform: translate(-6px, -50%) scale(.6); } 100% { opacity: 0; transform: translate(10px, -50%) scale(2.2); } }
+    .muted .grille { filter: grayscale(1); opacity: .6; }
+
+    /* tracklist: tumbuh ke atas dari radio */
+    .tracklist { display: none; flex: none; height: 196px; margin-bottom: 18px; flex-direction: column; gap: 5px; padding: 6px;
+      background: var(--body); border: 2px solid var(--ink); border-radius: 10px; box-shadow: 3px 3px 0 var(--ink); animation: unroll .25s steps(5); transform-origin: bottom; }
+    @keyframes unroll { from { transform: scaleY(.1); opacity: 0; } }
+    .list-open .tracklist { display: flex; }
+    .tl-head { display: flex; align-items: center; gap: 6px; color: var(--ink); -webkit-app-region: drag; }
+    .tl-head b { flex: 1; font-size: 9px; }
+    .tl-head button { width: 16px; height: 14px; background: var(--key); border-radius: 3px; font-size: 8px; line-height: 1; }
+    .tracks { flex: 1; overflow-y: auto; background: var(--screen); color: var(--amber); border: 2px solid var(--ink); border-radius: 4px; padding: 3px; }
+    .tracks::-webkit-scrollbar { width: 6px; }
+    .tracks::-webkit-scrollbar-thumb { background: var(--amber-dim); }
+    .trk { all: unset; box-sizing: border-box; display: grid; grid-template-columns: 16px 1fr; gap: 0 4px; width: 100%; padding: 3px 4px; cursor: pointer; border-radius: 2px; }
+    .trk:hover, .trk:focus-visible { background: rgba(255, 176, 0, .16); }
+    .trk.now { background: var(--amber); color: var(--screen); }
+    .trk.now .n { animation: blink 1s steps(2) infinite; }
+    .trk .n { grid-row: 1 / 3; color: var(--amber-dim); }
+    .trk.now .n { color: var(--screen); }
+    .trk span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .trk small { font-size: 7px; opacity: .7; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .trk.picked { animation: picked .4s steps(2) 2; }
+    @keyframes picked { 50% { background: #fff3c4; color: var(--screen); } }
+    .tl-empty { padding: 10px 6px; color: var(--amber-dim); line-height: 1.6; }
     .flip { transform: scaleX(-1); }
   </style>
 </head>
 <body>
+  <div class="tracklist" id="tracklist">
+    <div class="tl-head"><b>▤ TRACKLIST</b><span id="tlCount"></span><button id="tlClose" title="Hide list (L)">▾</button></div>
+    <div class="tracks" id="tracks"></div>
+  </div>
   <div class="radio" id="radio">
-    <div class="grille"></div>
+    <div class="grille" id="grille"></div>
+    <i class="wave" id="w1"></i><i class="wave w2" id="w2"></i>
     <div class="screen">
       <div class="scale"><span>88</span><span>92</span><span>96</span><span>100</span><span>104</span><span>108</span></div>
       <i class="needle" id="needle"></i>
       <div class="txt"><span class="title" id="title">ALMAC FM</span></div>
       <div class="sub"><span class="live" id="status"></span> <span id="artist"></span></div>
       <button id="openYt" data-cmd="open" title="Open YouTube Music in a new tab">▶ OPEN YOUTUBE MUSIC</button>
+      <div class="vol" id="vol"><b id="volIcon">VOL</b><div class="bars" id="bars"></div><span class="pct" id="pct"></span></div>
     </div>
     <div class="knobs">
       <button class="knob" data-cmd="open" title="Tune: go to the music tab"></button>
@@ -97,6 +149,7 @@
       <button data-cmd="next" title="Next track (→)"><svg viewBox="0 0 5 5"><path d="M0 0h1v5H0zM1 1h1v3H1zM2 2h1v1H2zM4 0h1v5H4z"/></svg></button>
       <button data-cmd="volDown" title="Volume down (↓)"><svg viewBox="0 0 5 5"><path d="M0 2h5v1H0z"/></svg></button>
       <button data-cmd="volUp" title="Volume up (↑)"><svg viewBox="0 0 5 5"><path d="M0 2h5v1H0zM2 0h1v5H2z"/></svg></button>
+      <button id="listBtn" title="Tracklist: pick a song (L)"><svg viewBox="0 0 5 5"><path d="M0 0h5v1H0zM0 2h5v1H0zM0 4h5v1H0z"/></svg></button>
     </div>
   </div>
 <script>
@@ -123,12 +176,79 @@ function show(s) {
     $('needle').style.left = 8 + h % 85 + '%'
   }
 }
-const send = cmd => music(cmd).then(show)
+// ---- volume: bar pixel + speaker + gelombang ----
+const BARS = 10
+$('bars').append(...Array.from({ length: BARS }, (_, i) => { const b = document.createElement('i'); b.style.setProperty('--n', i); return b }))
+let volTimer
+const replay = (el, cls) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls) }
+function showVolume(v, dir) {
+  const lit = v == null ? 0 : Math.round(v / 100 * BARS)
+  ;[...$('bars').children].forEach((b, i) => { b.classList.toggle('lit', i < lit); b.classList.remove('edge') })
+  const edge = $('bars').children[dir > 0 ? lit - 1 : lit]
+  if (edge) replay(edge, 'edge') // bar yang baru menyala / padam meletup
+  $('pct').textContent = v == null ? '' : v
+  $('volIcon').textContent = v === 0 ? 'MUTE' : 'VOL'
+  $('radio').classList.toggle('muted', v === 0)
+  replay($('vol'), 'show')
+  replay($('grille'), dir > 0 ? 'boom' : 'hush')
+  if (dir > 0 && v !== 0) { replay($('w1'), 'go'); replay($('w2'), 'go') }
+}
+
+// ---- tracklist ----
+let listOpen = false, lastTracks = ''
+function showTracks(tracks) {
+  const key = JSON.stringify(tracks)
+  if (key === lastTracks) return
+  const first = !lastTracks
+  lastTracks = key
+  $('tlCount').textContent = tracks.length ? tracks.length + ' SONGS' : ''
+  const box = $('tracks')
+  if (!tracks.length) {
+    box.innerHTML = '<p class="tl-empty">NO QUEUE YET.<br>PLAY A SONG OR PLAYLIST IN YOUTUBE MUSIC (OR A YOUTUBE PLAYLIST) AND ITS QUEUE SHOWS UP HERE.</p>'
+    return
+  }
+  box.replaceChildren(...tracks.map((t, i) => {
+    const b = document.createElement('button')
+    b.className = 'trk' + (t.now ? ' now' : '')
+    b.title = t.title + (t.artist ? ' — ' + t.artist : '')
+    b.innerHTML = '<b class="n"></b><span></span><small></small>'
+    b.children[0].textContent = t.now ? '▶' : String(i + 1).padStart(2, '0')
+    b.children[1].textContent = t.title || '(untitled)'
+    b.children[2].textContent = t.artist
+    b.onclick = () => { replay(b, 'picked'); music({ pick: i }).then(show) }
+    return b
+  }))
+  if (first) box.querySelector('.now')?.scrollIntoView({ block: 'center' })
+}
+async function setList(open) {
+  listOpen = open
+  $('listBtn').classList.toggle('on', open)
+  if (open) { lastTracks = ''; await music('list') } else music('unlist')
+  document.body.classList.toggle('list-open', open)
+  if (open) send('tracks')
+}
+$('listBtn').addEventListener('click', () => setList(!listOpen))
+$('tlClose').addEventListener('click', () => setList(false))
+
+let lastVol = null
+function onResult(s, cmd) {
+  show(s)
+  if (s?.tracks) showTracks(s.tracks)
+  if (cmd === 'volUp' || cmd === 'volDown') showVolume(s?.volume ?? null, cmd === 'volUp' ? 1 : -1)
+  // volume diubah dari halaman (slider YouTube Music): tampilkan juga
+  else if (s?.volume != null && lastVol != null && s.volume !== lastVol) showVolume(s.volume, s.volume > lastVol ? 1 : -1)
+  if (s?.volume != null) lastVol = s.volume
+}
+const send = cmd => music(cmd).then(s => onResult(s, cmd))
 document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => send(b.dataset.cmd)))
 const KEYS = { ' ': 'play', ArrowLeft: 'prev', ArrowRight: 'next', ArrowUp: 'volUp', ArrowDown: 'volDown', Escape: 'close' }
-addEventListener('keydown', e => { if (KEYS[e.key]) { e.preventDefault(); send(KEYS[e.key]) } })
+addEventListener('keydown', e => {
+  if (e.key === 'l' || e.key === 'L') return setList(!listOpen)
+  if (e.target.classList?.contains('trk') && e.key === ' ') return // spasi di daftar = pilih lagu
+  if (KEYS[e.key]) { e.preventDefault(); send(KEYS[e.key]) }
+})
 send('state')
-setInterval(() => send('state'), 2000)
+setInterval(() => send(listOpen ? 'tracks' : 'state'), 2000)
 </script>
 </body>
 </html>
