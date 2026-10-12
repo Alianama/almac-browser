@@ -1,0 +1,1458 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <title>Almac Browser</title>
+  <link rel="stylesheet" href="../node_modules/@fontsource/silkscreen/index.css">
+  <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <header class="top"><div class="logo pixel"><img src="logo.svg" alt=""><span>ALMAC</span></div><span id="privBadge" class="priv-badge pixel" hidden>PRIVAT</span></header>
+
+    <div class="nav">
+      <button data-cmd="back" title="Kembali (⌘[)" data-icon="back"></button>
+      <button data-cmd="forward" title="Maju (⌘])" data-icon="forward"></button>
+      <button data-cmd="reload" title="Muat ulang (⌘R)" data-icon="reload"></button>
+      <button data-cmd="newTab" title="Tab baru (⌘T)" data-icon="plus"></button>
+    </div>
+
+    <div class="search-wrap">
+      <div class="search glass"><button type="button" id="siteBtn" class="site-btn" title="Info situs: koneksi, sertifikat, cookie, izin"></button><input id="url" placeholder="Cari Google atau ketik URL" spellcheck="false" autocomplete="off"><button type="button" id="zoomBtn" class="zoom-chip" title="Zoom situs ini — klik untuk kembali 100% (⌘0)" hidden></button><button type="button" id="starBtn" class="site-btn" title="Bookmark halaman ini (⌘D)" data-icon="star"></button></div>
+      <div id="suggest" class="suggest glass" hidden></div>
+    </div>
+
+    <browser-action-list id="actions" alignment="bottom right"></browser-action-list>
+
+    <section class="ext-card glass" id="extPanel" hidden>
+      <div class="label"><span>Ekstensi</span><button class="mini" data-close-panel title="Tutup" data-icon="x"></button></div>
+      <div id="extList"></div>
+      <button class="store" data-cmd="webStore"><span data-icon="plus"></span>Chrome Web Store</button>
+    </section>
+
+    <section class="ext-card glass" id="historyPanel" hidden>
+      <div class="label"><span>Library</span><span class="ws-tools"><button class="mini" id="importBtn" type="button" title="Import dari Chrome / Brave / Edge / Arc" data-icon="download"></button><button class="mini" data-close-panel title="Tutup" data-icon="x"></button></span></div>
+      <div class="seg lib-tabs"><button type="button" data-lib="history" class="on">History</button><button type="button" data-lib="bookmarks">Bookmark</button><button type="button" data-lib="downloads">Unduhan</button></div>
+      <input id="historySearch" class="field" placeholder="Cari history" autocomplete="off">
+      <div id="historyList"></div>
+      <button class="store danger" id="historyClear"><span data-icon="trash"></span>Hapus semua</button>
+    </section>
+
+    <section class="tabs-card glass" id="tabsPanel">
+      <div class="label"><span id="wsName" class="ws-name" title="Klik 2x untuk edit workspace. Geser 2/3 jari di sini untuk pindah"></span><span class="ws-tools"><span id="count"></span><button class="mini" id="wsEditBtn" type="button" title="Edit workspace" data-icon="edit"></button></span></div>
+      <div id="tabs"></div>
+      <div class="ws-bar"><div id="wsDots"></div><button class="mini" id="wsAddBtn" type="button" title="Workspace baru" data-icon="plus"></button></div>
+    </section>
+
+    <form id="newProfile" class="glass">
+      <input id="pname" placeholder="Nama profil" autocomplete="off">
+      <input type="color" id="pcolor" value="#ffc93c" title="Warna profil">
+      <button title="Buat & login Google" data-icon="check"></button>
+    </form>
+
+    <footer class="bottom glass">
+      <div class="profiles-row"><div id="profiles"></div><button id="settingsBtn" class="mini" type="button" title="Pengaturan (⌘,)" data-icon="gear"></button></div>
+      <div class="status">
+        <div class="chip" id="shield" title="Iklan & pelacak diblokir di tab ini"><span data-icon="shield"></span><b id="blocked">0</b></div>
+        <button data-cmd="passwords" title="Cari password di Keychain (⌘⇧P): domain disalin, tempel di Passwords" data-icon="key"></button>
+        <button id="historyBtn" title="History & Bookmark (⌘Y)" data-icon="clock"></button>
+        <button id="extBtn" title="Kelola ekstensi" data-icon="ext"></button>
+        <button data-cmd="theme" id="themeBtn" title="Tema"></button>
+      </div>
+    </footer>
+  </aside>
+
+  <div id="dragbar"></div>
+  <div id="edge" title="Arahkan kursor ke sini untuk membuka sidebar"></div>
+  <div id="resizer" title="Seret untuk mengubah lebar · klik 2x untuk sembunyikan/sematkan sidebar (⌘S)"></div>
+  <div id="peekSnap" class="snaps" hidden></div>
+  <div id="coverSnap" class="snaps" hidden></div>
+  <div id="paneA" class="pane"></div><div id="paneB" class="pane"></div>
+  <div id="splitter" title="Seret untuk mengubah lebar panel"></div>
+  <div id="findbar" hidden>
+    <span data-icon="search"></span>
+    <input id="findInput" placeholder="Cari di halaman" autocomplete="off" spellcheck="false">
+    <span id="findCount"></span>
+    <button type="button" class="mini" id="findPrev" title="Sebelumnya (⌘⇧G)" data-icon="findUp"></button>
+    <button type="button" class="mini" id="findNext" title="Berikutnya (⌘G)" data-icon="findDown"></button>
+    <button type="button" class="mini" id="findClose" title="Tutup (Esc)" data-icon="x"></button>
+  </div>
+  <div id="toast" hidden></div>
+  <nav id="bmbar"><button type="button" id="bmAll" class="bm-item bm-icon" title="Semua bookmark (⌘⌥B)" data-icon="grid"></button><span class="bm-sep"></span><div id="bmItems"></div><button type="button" id="bmMore" class="bm-item bm-icon" title="Bookmark lainnya" data-icon="more" hidden></button></nav>
+  <div id="overlay" hidden><div id="snap" class="snaps"></div></div>
+  <div id="frame">
+    <div class="empty" id="empty" hidden>
+      <img src="logo.svg" alt="" class="start-logo">
+      <h1>ALMAC</h1>
+      <div class="start-wrap">
+        <form id="startForm" class="start-search glass">
+          <span data-icon="search"></span>
+          <input id="startInput" placeholder="Cari atau ketik URL" autocomplete="off" spellcheck="false">
+          <button type="button" id="startEngine" class="engine-chip" title="Ganti mesin pencari"></button>
+        </form>
+        <div id="startSuggest" class="suggest glass" hidden></div>
+      </div>
+      <p class="start-hint"><kbd>⌘T</kbd> tab baru · <kbd>⌘L</kbd> kolom alamat · <kbd>⌘D</kbd> bookmark · <kbd>⌘,</kbd> pengaturan</p>
+    </div>
+  </div>
+
+<script src="icons.js"></script>
+<script>
+// semua ikon UI memakai ikon animasi Lucide (ui/icons.js); nama lokal -> nama ikon
+const ICON_SET = window.ALMAC_ICONS || {}
+const ICON_MAP = {
+  back: 'chevron-left', forward: 'chevron-right', reload: 'refresh-cw', plus: 'plus', search: 'search', shield: 'shield-check',
+  ext: 'blocks', check: 'check', x: 'x', system: 'monitor', light: 'sun', dark: 'moon', pin: 'pin', gear: 'settings',
+  trash: 'trash-2', key: 'key-round', clock: 'history', globe: 'globe', edit: 'pencil', up: 'chevron-left', down: 'chevron-right',
+  copy: 'copy', move: 'arrow-right', lock: 'lock', warn: 'triangle-alert', cookie: 'cookie', camera: 'camera', mic: 'mic',
+  location: 'map-pin', bell: 'bell', split: 'panel-left', private: 'eye-off', findUp: 'chevron-up', findDown: 'chevron-down', file: 'file-down', pause: 'pause', play: 'play', cancel: 'circle-x', retry: 'rotate-ccw', folderPlus: 'folder-plus', user: 'user', grid: 'layout-grid', folder: 'folder', folderOpen: 'folder-open', chevron: 'chevron-right', more: 'chevrons-right', clipboard: 'clipboard', external: 'external-link', info: 'info', cert: 'badge-check',
+}
+const $ = s => document.querySelector(s)
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e }
+const iconEl = name => wsIcon(ICON_MAP[name] || name)
+
+document.querySelectorAll('[data-icon]').forEach(e => e.replaceChildren(iconEl(e.dataset.icon)))
+document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => almac.cmd(b.dataset.cmd)))
+
+const host = u => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
+const looksUrl = v => /^[a-z]+:\/\//i.test(v) || /^[^\s]+\.[^\s]{2,}$/.test(v) || v.startsWith('localhost')
+
+// ---- saran pencarian (bookmark + history + mesin pencari), dipakai kolom alamat & halaman awal ----
+function attachSuggest(input, box) {
+  let items = [], idx = -1, seq = 0, timer
+  const close = () => { box.hidden = true; items = []; idx = -1 }
+  const go = v => { if (v.trim()) almac.cmd('navigate', v); input.value = input === url ? input.value : ''; close(); input.blur() }
+  const draw = () => {
+    box.replaceChildren(...items.map((it, i) => el('div', {
+      className: 'sug' + (i === idx ? ' sel' : ''),
+      onmousedown: e => { e.preventDefault(); go(it.go) },
+    }, iconEl(it.icon), el('span', { textContent: it.text }), it.sub ? el('small', { textContent: it.sub }) : '')))
+    box.hidden = !items.length
+    // tinggi maksimal = sisa ruang sampai bawah jendela (sisanya di-scroll)
+    if (!box.hidden) box.style.maxHeight = Math.max(160, innerHeight - box.getBoundingClientRect().top - 16) + 'px'
+  }
+  const update = async () => {
+    const q = input.value.trim()
+    const my = ++seq
+    if (!q) return close()
+    const r = await almac.ask('suggest', q)
+    if (my !== seq || document.activeElement !== input) return // sudah ada ketikan baru
+    items = [
+      { icon: looksUrl(q) ? 'globe' : 'search', text: q, sub: looksUrl(q) ? 'Buka' : lastState?.engineName, go: q },
+      ...r.bookmarks.map(b => ({ icon: 'star', text: b.title || b.url, sub: host(b.url), go: b.url })),
+      ...r.history.map(h => ({ icon: 'clock', text: h.title || h.url, sub: host(h.url), go: h.url })),
+      ...r.search.map(t => ({ icon: looksUrl(t) ? 'globe' : 'search', text: t, go: t })),
+    ]
+    idx = 0
+    draw()
+  }
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(update, 90) })
+  input.addEventListener('keydown', e => {
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && items.length) {
+      e.preventDefault()
+      idx = (idx + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+      draw()
+    }
+    if (e.key === 'Enter') { e.preventDefault(); go(idx > 0 ? items[idx].go : input.value) } // item 0 = teks yang diketik (bisa basi kalau ngetik cepat)
+    if (e.key === 'Escape') box.hidden ? input.blur() : close()
+  })
+  input.addEventListener('blur', () => { seq++; close() })
+}
+const url = $('#url')
+const sug = $('#suggest')
+attachSuggest(url, sug)
+url.addEventListener('focus', () => url.select())
+almac.onFocusUrl(() => url.focus())
+
+$('#newProfile').addEventListener('submit', e => {
+  e.preventDefault()
+  almac.cmd('addProfile', { name: $('#pname').value.trim(), color: $('#pcolor').value })
+  $('#pname').value = ''
+  $('#newProfile').classList.remove('open')
+})
+
+// panel ekstensi / history menggantikan daftar tab saat dibuka
+const PANELS = { tabs: '#tabsPanel', ext: '#extPanel', history: '#historyPanel' }
+let panel = 'tabs'
+function showPanel(name) {
+  panel = name
+  for (const [k, sel] of Object.entries(PANELS)) $(sel).hidden = k !== name
+  $('#extBtn').classList.toggle('on', name === 'ext')
+  $('#historyBtn').classList.toggle('on', name === 'history')
+  if (name === 'history') { $('#historySearch').value = ''; loadLibrary(); $('#historySearch').focus() }
+}
+const togglePanel = name => showPanel(panel === name ? 'tabs' : name)
+$('#extBtn').addEventListener('click', () => togglePanel('ext'))
+$('#historyBtn').addEventListener('click', () => togglePanel('history'))
+document.querySelectorAll('[data-close-panel]').forEach(b => b.addEventListener('click', () => showPanel('tabs')))
+almac.onToggleHistory(() => { libTab = 'history'; togglePanel('history') })
+almac.onToggleBookmarks(() => { libTab = 'bookmarks'; togglePanel('history') })
+almac.onOpenImport(() => openImport())
+
+// ---- history ----
+const dayLabel = d => {
+  const yesterday = new Date(Date.now() - 864e5)
+  if (d.toDateString() === new Date().toDateString()) return 'Hari ini'
+  if (d.toDateString() === yesterday.toDateString()) return 'Kemarin'
+  return d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' })
+}
+// Library: tab History & Bookmark di panel yang sama
+let libTab = 'history'
+const libRow = (title, url, meta, onRemove, removeTitle) => el('div', { className: 'hrow', title: url, onclick: () => almac.cmd('open', url) },
+  meta, el('div', { className: 'meta' }, el('b', { textContent: title || url }), el('small', { textContent: host(url) })),
+  el('button', { className: 'mini hx', title: removeTitle, onclick: e => { e.stopPropagation(); onRemove(); setTimeout(loadLibrary, 50) } }, iconEl('x')))
+const fmtBytes = n => !n ? '0 B' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB'
+const DL_STATE = { completed: 'Selesai', cancelled: 'Dibatalkan', interrupted: 'Gagal / terputus', paused: 'Dijeda' }
+function downloadRow(d) {
+  const live = d.state === 'progressing' || d.state === 'paused'
+  const pct = d.total ? Math.round(d.received / d.total * 100) : 0
+  const act = (icon, title, cmd) => el('button', { type: 'button', className: 'mini', title, onclick: e => { e.stopPropagation(); almac.cmd(cmd, d.id) } }, iconEl(icon))
+  return el('div', { className: 'hrow dl ' + d.state, title: d.url, onclick: () => d.state === 'completed' && almac.cmd('dlOpen', d.id) },
+    iconEl('file'),
+    el('div', { className: 'meta' },
+      el('b', { textContent: d.filename }),
+      live ? el('div', { className: 'dl-bar' }, el('i', { style: `width:${pct}%` })) : '',
+      el('small', { textContent: live ? `${fmtBytes(d.received)} / ${d.total ? fmtBytes(d.total) : '?'}${d.state === 'paused' ? ' · dijeda' : ' · ' + pct + '%'}` : `${DL_STATE[d.state] || d.state} · ${fmtBytes(d.total || d.received)}` })),
+    el('div', { className: 'dl-actions' },
+      ...(d.state === 'progressing' ? [act('pause', 'Jeda', 'dlPause'), act('cancel', 'Batalkan', 'dlCancel')] : []),
+      ...(d.state === 'paused' ? [act('play', 'Lanjutkan', 'dlResume'), act('cancel', 'Batalkan', 'dlCancel')] : []),
+      ...(d.state === 'completed' ? [act('folderOpen', 'Tampilkan di Finder', 'dlShow')] : []),
+      ...(!live ? [act('x', 'Hapus dari daftar', 'dlRemove')] : [])))
+}
+
+async function loadLibrary() {
+  if (libTab === 'downloads') return loadDownloads()
+  const isHistory = libTab === 'history'
+  document.querySelectorAll('[data-lib]').forEach(b => b.classList.toggle('on', b.dataset.lib === libTab))
+  $('#historySearch').placeholder = isHistory ? 'Cari history' : 'Cari bookmark'
+  $('#historyClear').hidden = !isHistory
+  $('#historyClear').lastChild.textContent = 'Hapus semua'
+  const items = (await almac.ask(isHistory ? 'history' : 'bookmarks', $('#historySearch').value)).filter(it => !it.folder)
+  const rows = []
+  let lastGroup
+  for (const it of items) {
+    const group = isHistory ? dayLabel(new Date(it.ts)) : it.path.join(' / ') || 'Bookmark bar'
+    if (group !== lastGroup) rows.push(el('div', { className: 'day', textContent: lastGroup = group }))
+    rows.push(isHistory
+      ? libRow(it.title, it.url, el('time', { textContent: new Date(it.ts).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) }), () => almac.cmd('historyRemove', it.url), 'Hapus dari history')
+      : libRow(it.title, it.url, favicon(it), () => almac.cmd('bookmarkRemove', it.id), 'Hapus bookmark'))
+  }
+  const empty = isHistory ? 'History kosong.' : 'Belum ada bookmark. Tekan ⌘D atau ikon bintang di kolom alamat, atau import dari Chrome/Brave.'
+  $('#historyList').replaceChildren(...(rows.length ? rows : [el('p', { className: 'none', textContent: empty })]))
+}
+async function loadDownloads() {
+  document.querySelectorAll('[data-lib]').forEach(b => b.classList.toggle('on', b.dataset.lib === 'downloads'))
+  $('#historySearch').placeholder = 'Cari unduhan'
+  const q = $('#historySearch').value.trim().toLowerCase()
+  const items = (await almac.ask('downloads')).filter(d => !q || d.filename.toLowerCase().includes(q))
+  $('#historyClear').hidden = !items.some(d => d.state !== 'progressing' && d.state !== 'paused')
+  $('#historyClear').lastChild.textContent = 'Bersihkan daftar'
+  $('#historyList').replaceChildren(...(items.length ? items.map(downloadRow) : [el('p', { className: 'none', textContent: 'Belum ada unduhan. File tersimpan otomatis ke folder Downloads.' })]))
+}
+document.querySelectorAll('[data-lib]').forEach(b => b.addEventListener('click', () => { libTab = b.dataset.lib; loadLibrary() }))
+almac.onToggleDownloads(() => { libTab = 'downloads'; togglePanel('history') })
+// notifikasi kecil saat unduhan dimulai (klik = buka daftar unduhan)
+let toastTimer
+almac.onDownloadStarted(name => {
+  const t = $('#toast')
+  t.replaceChildren(iconEl('file'), el('span', { textContent: 'Mengunduh ' + name }))
+  t.hidden = false
+  t.onclick = () => { t.hidden = true; libTab = 'downloads'; showPanel('history') }
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { t.hidden = true }, 3500)
+})
+let historyTimer
+$('#historySearch').addEventListener('input', () => { clearTimeout(historyTimer); historyTimer = setTimeout(loadLibrary, 120) })
+$('#historyClear').addEventListener('click', async () => {
+  if (libTab === 'downloads') { almac.cmd('dlClear'); return setTimeout(loadLibrary, 400) } // file di disk tidak dihapus
+  if (await confirmModal('Hapus history', 'Semua history di profil ini akan dihapus.', 'Hapus semua')) { almac.cmd('historyClear'); setTimeout(loadLibrary, 50) }
+})
+
+// ---- bookmark halaman aktif ----
+$('#starBtn').addEventListener('click', e => { e.stopPropagation(); bookmarkCurrent() })
+
+// ---- import dari browser lain ----
+$('#importBtn').addEventListener('click', () => openImport())
+async function openImport() {
+  const sources = await almac.ask('importSources')
+  const target = lastState.profiles.find(p => p.id === lastState.activeProfile)
+  if (!sources.length) return openModal('Import', el('p', { className: 'modal-text', textContent: 'Tidak ditemukan Chrome, Brave, Edge, Arc, atau Vivaldi di perangkat ini.' }), [{ label: 'Tutup', primary: true }])
+  let picked = sources[0]
+  const wantB = el('input', { type: 'checkbox', checked: true }), wantH = el('input', { type: 'checkbox', checked: true })
+  const list = el('div', { className: 'import-list' }, ...Object.entries(Object.groupBy(sources, s => s.label)).flatMap(([label, items]) => [
+    el('div', { className: 'day', textContent: label }),
+    ...items.map(s => {
+      const radio = el('input', { type: 'radio', name: 'src', checked: s === picked })
+      radio.onchange = () => { picked = s; wantB.disabled = !s.bookmarks; wantB.checked &&= s.bookmarks; wantH.disabled = !s.history }
+      return el('label', { className: 'import-src' }, radio, el('div', { className: 'meta' }, el('b', { textContent: s.name }), el('small', { textContent: [s.email, s.dir].filter(Boolean).join(' · ') })),
+        el('small', { className: 'badges', textContent: [s.bookmarks && 'bookmark', s.history && 'history'].filter(Boolean).join(' + ') }))
+    }),
+  ]))
+  const go = el('button', { type: 'button', className: 'primary', textContent: 'Import' })
+  go.onclick = async () => {
+    if (!wantB.checked && !wantH.checked) return
+    go.disabled = true; go.textContent = 'Mengimpor…'
+    try {
+      const r = await almac.ask('importRun', { browser: picked.browser, dir: picked.dir, bookmarks: wantB.checked, history: wantH.checked })
+      closeModal()
+      openModal('Import selesai', el('p', { className: 'modal-text', textContent: `${r.bookmarks} bookmark dan ${r.history} history dari ${picked.label} "${picked.name}" masuk ke profil Almac "${target.name}". Data yang sudah ada tidak diduplikasi.` }), [{ label: 'Oke', primary: true }])
+      if (panel === 'history') loadLibrary()
+    } catch (e) {
+      go.disabled = false; go.textContent = 'Import'
+      alertBox.textContent = 'Gagal: ' + e.message.replace(/^Error invoking remote method 'ask': (Error: )?/, '')
+    }
+  }
+  const alertBox = el('p', { className: 'modal-text error' })
+  await openModal('Import dari browser lain', [
+    el('p', { className: 'modal-text', textContent: `Pilih profil sumber. Data masuk ke profil Almac "${target.name}". Password & cookie tidak ikut (dienkripsi oleh browser asal).` }),
+    list,
+    el('div', { className: 'inline' }, el('label', { className: 'check' }, wantB, el('span', { textContent: 'Bookmark' })), el('label', { className: 'check' }, wantH, el('span', { textContent: 'History' }))),
+    alertBox,
+  ], [{ label: 'Batal' }])
+  $('.modal .actions').append(go)
+}
+
+// ---- workspace ----
+// ---- geser 2 jari di panel tab: daftar tab ikut jari, lepas -> pindah atau mantul balik ----
+// Sumbu dikunci per gesture: 6px pertama menentukan horizontal (geser workspace, scroll vertikal dikunci)
+// atau vertikal (scroll biasa, geser diabaikan) sampai gesture + momentumnya selesai -> tidak saling tumpang tindih.
+// Electron tidak memberi fase gesture, jadi momentum dikenali dari pola event:
+// setelah pindah, event yang terus melemah = sisa momentum (diabaikan); jeda > 80ms atau lonjakan = gesture baru.
+const tabsPanel = $('#tabsPanel')
+const tabsEl = $('#tabs')
+const SWIPE_COMMIT = 70 // px geser sebelum pindah workspace
+const AXIS_LOCK = 6     // px sebelum sumbu gesture diputuskan
+const GESTURE_GAP = 120 // ms tanpa event = gesture selesai
+let wsIndex = 0, wsCount = 1
+let gesture = null   // { axis: 'x'|'y'|null, sx, sy, lastT }
+let drag = null      // { dx }
+let cooldown = null  // { lastT, lastAbs } sesudah pindah
+let idleTimer, frame, pendingX = 0, pendingAnim = false
+const setDrag = (x, animate) => {
+  pendingX = x; pendingAnim = animate
+  frame ||= requestAnimationFrame(() => { // satu update per frame layar
+    frame = 0
+    tabsEl.style.transition = pendingAnim ? 'transform .22s var(--ease), opacity .22s var(--ease)' : 'none'
+    tabsEl.style.transform = pendingX ? `translateX(${pendingX}px)` : ''
+    tabsEl.style.opacity = pendingX ? Math.max(0.2, 1 - Math.abs(pendingX) / 260) : ''
+  })
+}
+tabsPanel.addEventListener('wheel', e => {
+  if (!gesture || e.timeStamp - gesture.lastT > GESTURE_GAP) gesture = { axis: null, sx: 0, sy: 0 }
+  gesture.lastT = e.timeStamp
+  if (!gesture.axis) {
+    gesture.sx += Math.abs(e.deltaX); gesture.sy += Math.abs(e.deltaY)
+    if (Math.max(gesture.sx, gesture.sy) < AXIS_LOCK) { e.preventDefault(); return } // tunggu arah jelas
+    gesture.axis = gesture.sx > gesture.sy ? 'x' : 'y'
+  }
+  if (gesture.axis === 'y') return // scroll vertikal biasa
+  e.preventDefault() // sumbu x: kunci scroll vertikal
+
+  const abs = Math.abs(e.deltaX)
+  if (cooldown) {
+    const fresh = e.timeStamp - cooldown.lastT > 80 || abs > cooldown.lastAbs * 1.6 + 4
+    if (!fresh) { cooldown.lastT = e.timeStamp; cooldown.lastAbs = abs; return }
+    cooldown = null
+  }
+  drag ||= { dx: 0 }
+  drag.dx -= e.deltaX
+  const dir = drag.dx < 0 ? 1 : -1 // jari ke kiri -> workspace berikutnya
+  const hasNext = wsIndex + dir >= 0 && wsIndex + dir < wsCount
+  if (hasNext && Math.abs(drag.dx) > SWIPE_COMMIT) {
+    setDrag(-dir * 140, true) // lempar keluar, workspace baru masuk dari sisi lain (lihat onState)
+    almac.cmd('wsStep', dir)
+    drag = null
+    cooldown = { lastT: e.timeStamp, lastAbs: abs }
+    clearTimeout(idleTimer)
+    return
+  }
+  setDrag(hasNext ? drag.dx : drag.dx * 0.25) // ujung daftar workspace: efek karet
+  clearTimeout(idleTimer)
+  idleTimer = setTimeout(() => { drag = null; setDrag(0, true) }, 90) // jari diangkat tanpa cukup jauh -> mantul balik
+}, { passive: false })
+
+// ---- modal pixel (pengganti dialog bawaan macOS) ----
+// Halaman web adalah native view yang selalu di atas UI, jadi main menyembunyikannya selama modal terbuka
+// dan mengirim snapshot halaman untuk dijadikan latar blur.
+let modalOpen = false, modalOnClose = null
+async function openModal(title, body, actions, onClose) {
+  closeCtx()
+  closeBmMenus()
+  endPeek(true)
+  if (modalOpen) closeModal()
+  modalOpen = true
+  modalOnClose = onClose
+  paintSnaps($('#snap'), await almac.ask('modalOpen'))
+  const primary = actions.find(a => a.primary)
+  const form = el('form', { className: 'modal glass', onsubmit: e => { e.preventDefault(); if (primary && primary.onClick?.() !== false) closeModal() } },
+    el('h2', { textContent: title }),
+    ...[].concat(body),
+    el('div', { className: 'actions' }, ...actions.map(a => el('button', {
+      type: a.primary ? 'submit' : 'button',
+      className: [a.primary && 'primary', a.danger && 'danger'].filter(Boolean).join(' '),
+      textContent: a.label,
+      onclick: a.primary ? undefined : () => { if (a.onClick?.() !== false) closeModal() },
+    }))))
+  $('#overlay').replaceChildren($('#snap'), form)
+  $('#overlay').hidden = false
+  ;(form.querySelector('input') || form.querySelector('button.primary, button'))?.focus()
+}
+function closeModal() {
+  if (!modalOpen) return
+  modalOpen = false
+  $('#overlay').hidden = true
+  almac.cmd('modalClose')
+  const cb = modalOnClose
+  modalOnClose = null
+  cb?.()
+}
+$('#overlay').addEventListener('mousedown', e => { if (e.target.id === 'overlay' || e.target.closest('#snap')) closeModal() })
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (modalOpen) closeModal(); closeCtx() } })
+
+// screenshot halaman (1-2 panel) ditempatkan persis di posisi aslinya
+const paintSnaps = (box, shots) => {
+  box.replaceChildren(...(shots || []).map(s => el('img', { src: s.src, alt: '', style: `left:${s.x}px;top:${s.y}px;width:${s.width}px;height:${s.height}px` })))
+  box.hidden = !shots?.length
+}
+
+const confirmModal = (title, text, okLabel = 'Hapus') => new Promise(resolve => {
+  let ok = false
+  openModal(title, el('p', { className: 'modal-text', textContent: text }), [
+    { label: 'Batal' },
+    { label: okLabel, primary: true, danger: true, onClick: () => { ok = true } },
+  ], () => resolve(ok)) // Esc / klik luar / Batal = false
+})
+
+const promptModal = (title, label, value = '', okLabel = 'Simpan') => new Promise(resolve => {
+  let result = null
+  const input = el('input', { className: 'field', value, maxLength: 60 })
+  openModal(title, el('label', { className: 'row' }, el('span', { textContent: label }), input), [
+    { label: 'Batal' },
+    { label: okLabel, primary: true, onClick: () => { result = input.value.trim() || null } },
+  ], () => resolve(result))
+})
+
+// tombol yang harus diklik 2x untuk aksi berbahaya di dalam modal
+const twoStep = (label, sure, fn, disabled) => {
+  const b = el('button', { type: 'button', className: 'danger wide', textContent: label, disabled })
+  b.onclick = () => { if (b.dataset.armed) { fn(); closeModal() } else { b.dataset.armed = '1'; b.textContent = sure } }
+  return b
+}
+
+// ---- menu klik kanan pixel ----
+let ctxEl = null
+function closeCtx() {
+  if (!ctxEl) return
+  ctxEl.remove(); ctxEl = null
+  if (!bmMenus.length) coverPage(false)
+}
+async function ctxMenu(x, y, items, { cover } = {}) {
+  closeCtx()
+  if (cover) await coverPage(true) // menu di atas area halaman: halaman diganti snapshot dulu
+  ctxEl = el('div', { className: 'ctx glass' }, ...items.map(it => it === '-' ? el('hr') : el('button', {
+    type: 'button', className: 'ctx-item' + (it.danger ? ' danger' : ''), disabled: !!it.disabled,
+    onclick: () => { closeCtx(); it.onClick() },
+  }, it.icon ? iconEl(it.icon) : el('i'), el('span', { textContent: it.label }))))
+  document.body.append(ctxEl)
+  // tanpa cover: tetap di dalam sidebar (area halaman web tertutup native view)
+  const maxX = cover ? innerWidth : $('#sidebar').offsetWidth
+  ctxEl.style.left = Math.max(6, Math.min(x, maxX - ctxEl.offsetWidth - 6)) + 'px'
+  ctxEl.style.top = Math.max(6, Math.min(y, innerHeight - ctxEl.offsetHeight - 6)) + 'px'
+}
+document.addEventListener('mousedown', e => { if (ctxEl && !ctxEl.contains(e.target)) closeCtx() })
+addEventListener('blur', closeCtx)
+
+// ---- ikon animasi: Lucide + animateicons (dikonversi oleh scripts/build-icons.js) ----
+const POPULAR = ['briefcase', 'house', 'laptop', 'code', 'terminal', 'gamepad', 'book-open', 'graduation-cap', 'music', 'clapperboard',
+  'shopping-cart', 'palette', 'plane', 'lightbulb', 'coffee', 'star', 'flame', 'heart', 'rocket', 'globe', 'camera', 'dumbbell',
+  'wallet', 'message-circle', 'bell', 'zap', 'sparkles', 'folder', 'calendar', 'trophy', 'leaf', 'moon', 'sun', 'cpu', 'database',
+  'cloud', 'pen-tool', 'mic', 'headphones', 'tv', 'car', 'bike', 'map-pin', 'gift', 'dog', 'cat', 'users', 'github', 'chart-line',
+  'shield', 'lock', 'bot', 'brain', 'atom', 'flask-conical', 'stethoscope', 'tent', 'mountain', 'sprout', 'shopping-bag', 'piggy-bank',
+  'mail', 'video', 'image', 'bookmark', 'flag', 'target', 'compass', 'feather', 'gem', 'crown', 'party-popper', 'utensils', 'activity',
+].filter(n => ICON_SET[n])
+const ICON_NAMES = [...POPULAR, ...Object.keys(ICON_SET).filter(n => !POPULAR.includes(n))]
+const EASE = { linear: 'linear', easeIn: 'cubic-bezier(.42,0,1,1)', easeOut: 'cubic-bezier(0,0,.58,1)', easeInOut: 'cubic-bezier(.42,0,.58,1)' }
+const toEasing = e => Array.isArray(e) ? `cubic-bezier(${e.join(',')})` : EASE[e] || 'ease'
+const TF = { x: 0, y: 0, rotate: 0, scale: 1, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 } // properti transform + nilai awal
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+
+// ikon workspace: nama ikon Lucide -> SVG, selain itu (emoji) tampil sebagai teks
+function wsIcon(icon) {
+  const span = el('span', { className: 'wsi' })
+  if (ICON_SET[icon]) { span.innerHTML = ICON_SET[icon].s; span.dataset.icon = icon } else span.textContent = icon || ''
+  return span
+}
+const offsetsFor = (t, len) => t.times?.length === len ? t.times : Array.from({ length: len }, (_, i) => len > 1 ? i / (len - 1) : 0)
+const sampleAt = (vals, offs, o) => { // nilai di offset o (untuk array keyframe yang panjangnya beda)
+  for (let i = 1; i < vals.length; i++) if (o <= offs[i]) return vals[i - 1] + (vals[i] - vals[i - 1]) * ((o - offs[i - 1]) / ((offs[i] - offs[i - 1]) || 1))
+  return vals[vals.length - 1]
+}
+// putar variant "animate" motion memakai Web Animations API
+function playIcon(span) {
+  const spec = ICON_SET[span?.dataset?.icon]?.a
+  if (!spec || reducedMotion.matches) return
+  span.querySelectorAll('[data-a]').forEach(node => {
+    node.getAnimations().forEach(a => a.cancel())
+    const { animate, normal } = spec[node.dataset.a]
+    const { transition: base = {}, ...target } = animate
+    const groups = {}
+    for (const k of Object.keys(target)) (groups[k in TF ? 'transform' : k] ||= []).push(k)
+    for (const [group, keys] of Object.entries(groups)) {
+      const t = { ...base, ...base[keys.find(k => base[k])] } // transition khusus per properti
+      const series = Object.fromEntries(keys.map(k => {
+        let v = [].concat(target[k])
+        if (v.length === 1) v = [normal[k] ?? (k in TF ? TF[k] : v[0]), v[0]] // satu nilai = dari keadaan normal
+        return [k, v]
+      }))
+      const n = Math.max(...Object.values(series).map(v => v.length))
+      const offs = offsetsFor(t, n)
+      const val = (k, i) => {
+        const v = series[k]
+        if (!v) return TF[k]
+        return v.length === n ? v[i] : sampleAt(v, offsetsFor(t, v.length), offs[i])
+      }
+      const frames = offs.map((offset, i) => {
+        let f
+        if (group === 'transform') {
+          const s = val('scale', i)
+          f = { transform: `translate(${val('x', i)}px, ${val('y', i)}px) rotate(${val('rotate', i)}deg) scale(${s * val('scaleX', i)}, ${s * val('scaleY', i)}) skewX(${val('skewX', i)}deg) skewY(${val('skewY', i)}deg)` }
+        } else {
+          const v = val(group, i)
+          f = group === 'pathLength' ? { strokeDasharray: `${v} 1` } : group === 'pathOffset' ? { strokeDashoffset: -v } : { [group]: v }
+        }
+        f.offset = offset
+        if (Array.isArray(t.ease) && typeof t.ease[0] !== 'number' && t.ease.length === n - 1 && i < n - 1) f.easing = toEasing(t.ease[i])
+        return f
+      })
+      if (group === 'pathLength' && !node.hasAttribute('pathLength')) node.setAttribute('pathLength', '1')
+      node.animate(frames, {
+        duration: (t.duration ?? 0.4) * 1000,
+        delay: (t.delay || 0) * 1000,
+        easing: Array.isArray(t.ease) && typeof t.ease[0] !== 'number' ? 'linear' : toEasing(t.ease),
+        iterations: t.repeat === 'Infinity' ? 3 : (t.repeat || 0) + 1, // ponytail: animasi tak terbatas dibatasi 3x
+        direction: t.repeatType === 'reverse' || t.repeatType === 'mirror' ? 'alternate' : 'normal',
+      })
+    }
+  })
+}
+// putar animasi ikon saat kursor masuk ke tombol/baris yang berisi ikon, dan saat diklik
+const ICON_HOSTS = 'button, .tab, .sug, .hrow, .ext-run, .ws-name, .icon-preview'
+const playIn = host => { const i = host?.querySelector(':scope > .wsi, :scope > * > .wsi') || host?.querySelector('.wsi'); if (i) playIcon(i) }
+document.addEventListener('mouseover', e => {
+  const host = e.target.closest(ICON_HOSTS)
+  if (host && !host.contains(e.relatedTarget)) playIn(host)
+})
+document.addEventListener('click', e => playIn(e.target.closest(ICON_HOSTS)))
+
+// ---- workspace ----
+let currentWs, lastState
+const WS_COLORS = ['', '#41a6f6', '#ffc93c', '#ff6b7a', '#7eebd3', '#a7f070', '#b07cff', '#ff9f43']
+
+// pemilih ikon animasi (dipakai workspace & profil): [kotak cari, grid]
+function iconPicker(draft, onPick) {
+  const search = el('input', { className: 'field', placeholder: `Cari ${ICON_NAMES.length} ikon (bahasa Inggris), mis. code, home`, autocomplete: 'off' })
+  const grid = el('div', { className: 'icon-grid' })
+  const fill = () => {
+    const q = search.value.trim().toLowerCase()
+    const list = q ? ICON_NAMES.filter(n => n.includes(q)) : ICON_NAMES
+    grid.replaceChildren(...(q ? list : ['', ...list]).map((icon, i) => {
+      const cell = el('button', {
+        type: 'button', className: 'icon-cell' + (icon === draft.icon ? ' on' : ''), title: icon || 'Tanpa ikon',
+        onclick() {
+          draft.icon = icon
+          grid.querySelectorAll('.icon-cell.on').forEach(c => c.classList.remove('on'))
+          this.classList.add('on')
+          this.classList.remove('bump'); void this.offsetWidth; this.classList.add('bump')
+          playIcon(this.firstChild)
+          onPick()
+        },
+      }, icon ? wsIcon(icon) : el('span', { className: 'wsi', textContent: '—' }))
+      if (i < 60) cell.style.animationDelay = i * 10 + 'ms' // muncul bertahap
+      return cell
+    }))
+    if (!list.length) grid.append(el('p', { className: 'none', textContent: 'Ikon tidak ditemukan.' }))
+  }
+  let timer
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(fill, 100) }
+  fill()
+  return [search, grid]
+}
+
+function editWorkspace(w) { // tanpa argumen = buat workspace baru
+  const isNew = !w
+  const s = lastState
+  const draft = { name: w?.name || '', icon: w?.icon || '', color: w?.color || '' }
+  const mark = (box, btn) => { box.querySelectorAll('.pick').forEach(b => b.classList.toggle('on', b === btn)) }
+
+  const profileColor = s.profiles.find(p => p.id === s.activeProfile).color
+  // pratinjau besar seperti saat membuat topic di Telegram
+  const preview = el('div', { className: 'icon-preview', title: 'Klik untuk memutar animasi' })
+  const setPreview = play => {
+    preview.replaceChildren(draft.icon ? wsIcon(draft.icon) : el('span', { className: 'wsi letter', textContent: (draft.name.trim()[0] || '?').toUpperCase() }))
+    preview.style.setProperty('--c', draft.color || profileColor)
+    if (play) { preview.classList.remove('bump'); void preview.offsetWidth; preview.classList.add('bump'); playIcon(preview.firstChild) }
+  }
+  preview.onclick = () => setPreview(true)
+  const name = el('input', { className: 'field', value: draft.name, placeholder: 'mis. Work, Kuliah, Gaming', maxLength: 24, oninput: () => { draft.name = name.value; if (!draft.icon) setPreview() } })
+
+  const [search, grid] = iconPicker(draft, () => setPreview(true))
+  setPreview()
+  const custom = el('input', { type: 'color', className: 'pick-color', value: draft.color || '#ffc93c', title: 'Warna lain' })
+  const colors = el('div', { className: 'picker' }, ...WS_COLORS.map(c => {
+    const b = el('button', { type: 'button', className: 'pick swatch' + (c === draft.color ? ' on' : ''), title: c || 'Ikut warna profil', onclick() { draft.color = c; mark(colors, this) } })
+    b.style.setProperty('--c', c || profileColor)
+    if (!c) b.textContent = 'P'
+    b.addEventListener('click', () => setPreview())
+    return b
+  }), custom)
+  custom.oninput = () => { draft.color = custom.value; mark(colors, null); setPreview() }
+  if (draft.color && !WS_COLORS.includes(draft.color)) custom.classList.add('on')
+
+  const body = [
+    el('div', { className: 'preview-row' }, preview, el('label', { className: 'row' }, el('span', { textContent: 'Nama' }), name)),
+    el('div', { className: 'row' }, el('span', { textContent: 'Ikon' }), search, grid),
+    el('div', { className: 'row' }, el('span', { textContent: 'Warna' }), colors),
+  ]
+  if (!isNew) {
+    const i = s.workspaces.findIndex(x => x.id === w.id)
+    body.push(
+      el('div', { className: 'row' }, el('span', { textContent: 'Urutan' }), el('div', { className: 'inline' },
+        el('button', { type: 'button', disabled: i === 0, onclick: () => { almac.cmd('wsMove', { id: w.id, dir: -1 }); closeModal() } }, iconEl('up'), 'Ke kiri'),
+        el('span', { className: 'muted', textContent: `${i + 1} dari ${s.workspaces.length}` }),
+        el('button', { type: 'button', disabled: i === s.workspaces.length - 1, onclick: () => { almac.cmd('wsMove', { id: w.id, dir: 1 }); closeModal() } }, 'Ke kanan', iconEl('down')))),
+      el('div', { className: 'row danger-zone' }, el('span', { textContent: `${w.tabs} tab` }), el('div', { className: 'inline' },
+        twoStep('Tutup semua tab', 'Yakin? Klik lagi', () => almac.cmd('wsCloseTabs', w.id), !w.tabs),
+        twoStep('Hapus workspace', 'Yakin? Klik lagi', () => almac.cmd('wsRemove', w.id), s.workspaces.length < 2))),
+    )
+  }
+  openModal(isNew ? 'Workspace baru' : 'Edit workspace', body, [
+    { label: 'Batal' },
+    { label: isNew ? 'Buat' : 'Simpan', primary: true, onClick: () => {
+      const data = { name: draft.name.trim(), icon: draft.icon, color: draft.color }
+      isNew ? almac.cmd('wsAdd', data) : almac.cmd('wsUpdate', { id: w.id, ...data })
+    } },
+  ])
+}
+
+const wsName = $('#wsName')
+wsName.addEventListener('dblclick', () => editWorkspace(currentWs))
+$('#wsEditBtn').addEventListener('click', () => editWorkspace(currentWs))
+$('#wsAddBtn').addEventListener('click', () => editWorkspace())
+
+function renderWorkspaces(s) {
+  currentWs = s.workspaces.find(w => w.id === s.activeWs)
+  wsIndex = s.workspaces.indexOf(currentWs)
+  wsCount = s.workspaces.length
+  wsName.replaceChildren(...(currentWs.icon ? [wsIcon(currentWs.icon)] : []), el('span', { textContent: currentWs.name }))
+  $('#wsDots').replaceChildren(...s.workspaces.map(w => {
+    const b = (el('button', {
+      className: 'dot' + (w.id === s.activeWs ? ' on' : '') + (w.icon ? ' has-icon' : ''),
+      title: `${w.name} (${w.tabs} tab) — klik kanan untuk edit`,
+      onclick: () => almac.cmd('wsSwitch', w.id),
+      oncontextmenu: e => { e.preventDefault(); editWorkspace(w) },
+    }, ...(w.icon ? [wsIcon(w.icon)] : [])))
+    if (w.color) b.style.setProperty('--wc', w.color)
+    return b
+  }))
+}
+
+// ---- info situs (seperti ikon gembok di Chrome) ----
+const SEC_ICON = { secure: 'lock', insecure: 'warn', neutral: 'search' }
+const siteBtn = $('#siteBtn')
+siteBtn.addEventListener('click', e => { e.stopPropagation(); openSiteInfo() })
+$('.search').addEventListener('mousedown', e => { if (e.target === e.currentTarget) { e.preventDefault(); url.focus() } })
+const PERMS = [['camera', 'Kamera', 'camera'], ['microphone', 'Mikrofon', 'mic'], ['geolocation', 'Lokasi', 'location'],
+  ['notifications', 'Notifikasi', 'bell'], ['clipboard', 'Baca clipboard', 'clipboard'], ['openExternal', 'Buka aplikasi lain', 'external']]
+const PERM_ASK = { camera: 'memakai kamera', microphone: 'memakai mikrofon', geolocation: 'mengetahui lokasimu', notifications: 'mengirim notifikasi', clipboard: 'membaca clipboard', openExternal: 'membuka aplikasi lain' }
+const fmtDate = sec => new Date(sec * 1000).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+const card = (icon, title, sub, ...extra) => el('div', { className: 'site-card' }, iconEl(icon), el('div', { className: 'meta' }, el('b', { textContent: title }), el('small', { textContent: sub })), ...extra)
+
+async function openSiteInfo() {
+  const info = await almac.ask('siteInfo')
+  if (!info) return
+  const web = info.protocol === 'https:' || info.protocol === 'http:'
+  const secure = info.protocol === 'https:' && (!info.cert || info.cert.result === 'net::OK')
+  const body = []
+  const conn = card(secure ? 'lock' : web ? 'warn' : 'info',
+    secure ? 'Koneksi aman' : web ? 'Koneksi tidak aman' : 'Halaman internal',
+    secure ? 'Data yang kamu kirim (password, kartu) terenkripsi.' : web ? 'Jangan masukkan password atau data pribadi di sini.' : info.url)
+  conn.classList.add(secure ? 'ok' : web ? 'bad' : 'neutral')
+  body.push(conn)
+  if (info.cert) {
+    const c = info.cert
+    const details = el('dl', { className: 'cert', hidden: true }, ...[
+      ['Diterbitkan untuk', c.subject + (c.subjectOrg ? ` (${c.subjectOrg})` : '')],
+      ['Diterbitkan oleh', c.issuer + (c.issuerOrg ? ` (${c.issuerOrg})` : '')],
+      ['Berlaku', `${fmtDate(c.validStart)} – ${fmtDate(c.validExpiry)}`],
+      ['Verifikasi', c.result + (c.knownRoot ? ' · root CA tepercaya' : '')],
+      ['Nomor seri', c.serial],
+      ['SHA-256', c.fingerprint.replace(/^sha256\//, '')],
+    ].flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]))
+    const label = el('span', { textContent: 'Lihat sertifikat' })
+    body.push(el('button', { type: 'button', className: 'link', onclick: () => { details.hidden = !details.hidden; label.textContent = details.hidden ? 'Lihat sertifikat' : 'Sembunyikan sertifikat' } }, iconEl('cert'), label), details)
+  }
+  if (web) {
+    body.push(
+      card('cookie', `${info.cookies} cookie`, 'tersimpan untuk ' + info.domain,
+        twoStep('Hapus data', 'Yakin?', () => almac.cmd('siteClearData', info.origin), false)),
+      card('shield', `${info.blocked} iklan & pelacak diblokir`, 'di halaman ini'),
+      el('div', { className: 'row' }, el('span', { textContent: 'Izin situs' }), el('div', { className: 'perms' }, ...PERMS.map(([kind, label, icon]) => {
+        const seg = el('div', { className: 'seg' }, ...[['ask', 'Tanya'], ['allow', 'Izinkan'], ['block', 'Blokir']].map(([v, t]) => el('button', {
+          type: 'button', className: v + ((info.perms[kind] || 'ask') === v ? ' on' : ''), textContent: t,
+          onclick() { almac.cmd('sitePerm', { origin: info.origin, kind, value: v }); seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === this)) },
+        })))
+        return el('div', { className: 'perm' }, iconEl(icon), el('span', { textContent: label }), seg)
+      }))),
+    )
+  }
+  openModal(info.host || 'Info situs', body, [{ label: 'Selesai', primary: true }])
+}
+
+// situs meminta izin -> modal pixel (pengganti prompt bawaan)
+almac.onPermRequest(({ id, host, kinds }) => {
+  let answered = false
+  const remember = el('input', { type: 'checkbox', checked: true })
+  const answer = allow => { answered = true; almac.cmd('permAnswer', { id, allow, remember: remember.checked }) }
+  openModal('Izin situs', [
+    el('p', { className: 'modal-text' }, el('b', { textContent: host }), ' ingin ' + kinds.map(k => PERM_ASK[k] || k).join(' dan ') + '.'),
+    el('label', { className: 'check' }, remember, el('span', { textContent: 'Ingat pilihan untuk situs ini' })),
+  ], [
+    { label: 'Blokir', onClick: () => answer(false) },
+    { label: 'Izinkan', primary: true, onClick: () => answer(true) },
+  ], () => { if (!answered) almac.cmd('permAnswer', { id, allow: false, remember: false }) })
+})
+
+// ---- sidebar: sembunyikan/tampilkan, muncul otomatis dari tepi kiri, ubah lebar ----
+const GAP_PX = 10 // samakan dengan --gap / GAP di main.js
+let peek = false, peekTimer
+async function startPeek() {
+  if (peek || !document.body.classList.contains('side-hidden') || modalOpen) return
+  peek = true
+  const snap = await almac.ask('peek', true) // halaman diganti snapshot supaya sidebar bisa tampil di atasnya
+  if (!peek) return almac.ask('peek', false)
+  paintSnaps($('#peekSnap'), snap)
+  document.body.classList.add('peek')
+}
+function endPeek(now) {
+  if (!peek) return
+  peek = false
+  clearTimeout(peekTimer)
+  document.body.classList.remove('peek')
+  // tunggu animasi meluncur keluar, baru kembalikan halaman asli
+  setTimeout(() => { if (!peek) { $('#peekSnap').hidden = true; almac.ask('peek', false) } }, now ? 0 : 220)
+}
+const sidebarBusy = () => document.activeElement === url || ctxEl || !sug.hidden
+// garis ubah-lebar dihitung bagian dari sidebar: kursor ke garis (untuk klik 2x = sematkan) tidak menutup sidebar
+const overSidebar = () => $('#sidebar').matches(':hover') || $('#resizer').matches(':hover')
+const scheduleEndPeek = () => {
+  if (!peek) return
+  clearTimeout(peekTimer)
+  peekTimer = setTimeout(() => { if (!sidebarBusy() && !overSidebar()) endPeek() }, 350)
+}
+$('#edge').addEventListener('mouseenter', startPeek)
+for (const node of [$('#sidebar'), $('#resizer')]) {
+  node.addEventListener('mouseenter', () => clearTimeout(peekTimer))
+  node.addEventListener('mouseleave', scheduleEndPeek)
+}
+url.addEventListener('blur', () => { if (!overSidebar()) scheduleEndPeek() })
+$('#peekSnap').addEventListener('mousedown', () => endPeek())
+
+const resizer = $('#resizer')
+resizer.addEventListener('pointerdown', e => {
+  e.preventDefault()
+  resizer.setPointerCapture(e.pointerId)
+  document.body.classList.add('resizing')
+  let frame = 0
+  resizer.onpointermove = ev => {
+    const w = Math.round(Math.min(420, Math.max(236, ev.clientX - GAP_PX / 2))) // main membatasi lagi sesuai lebar jendela
+    document.documentElement.style.setProperty('--sidebar', w + 'px')
+    cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(() => almac.cmd('sidebarWidth', w)) // satu update halaman per frame
+  }
+  resizer.onpointerup = () => { resizer.onpointermove = resizer.onpointerup = null; document.body.classList.remove('resizing') }
+})
+// klik 2x garis: sembunyikan sidebar; saat sidebar muncul sementara, klik 2x garis yang sama = sematkan lagi
+resizer.addEventListener('dblclick', () => almac.cmd('sidebarToggle'))
+
+// ---- bookmark bar (seperti Chrome/Brave) ----
+// Dropdown tampil di atas area halaman (native view) -> halaman diganti snapshot selama menu terbuka.
+let pageCovered = false
+async function coverPage(on) {
+  if (on === pageCovered) return
+  pageCovered = on
+  if (on) {
+    const snap = await almac.ask('cover', true)
+    if (!pageCovered) return almac.ask('cover', false)
+    paintSnaps($('#coverSnap'), snap)
+  } else {
+    $('#coverSnap').hidden = true
+    almac.ask('cover', false)
+  }
+}
+
+const bmItems = $('#bmItems')
+let bmTreeNodes = [], bmVersion = null, bmMenus = []
+// daftar datar -> pohon folder, urutan asli. Folder bisa berupa entri (folder kosong ikut) atau tersirat dari path.
+function bmTree(list) {
+  const root = { children: [], path: [] }
+  const folderIn = (parent, name) => {
+    let f = parent.children.find(c => c.children && c.name === name)
+    if (!f) parent.children.push(f = { name, children: [], parentPath: parent.path, path: [...parent.path, name] })
+    return f
+  }
+  for (const b of list) {
+    const parent = b.path.reduce(folderIn, root)
+    if (b.folder) folderIn(parent, b.title)
+    else parent.children.push(b)
+  }
+  return root.children
+}
+// semua path folder (untuk pemilih folder)
+function folderPaths(nodes, out = [[]]) {
+  for (const n of nodes) if (n.children) { out.push(n.path); folderPaths(n.children, out) }
+  return out
+}
+// favicon: cache dari kunjungan -> /favicon.ico situs itu sendiri -> ikon globe (tanpa layanan pihak ketiga)
+const favicon = b => {
+  let origin = ''
+  try { const u = new URL(b.url); if (/^https?:$/.test(u.protocol)) origin = u.origin } catch {}
+  const sources = [b.icon, origin && origin + '/favicon.ico'].filter(Boolean)
+  if (!sources.length) return iconEl('globe')
+  const img = el('img', { alt: '', src: sources.shift(), loading: 'lazy' })
+  img.onerror = () => { sources.length ? (img.src = sources.shift()) : img.replaceWith(iconEl('globe')) }
+  return img
+}
+const openBookmark = (b, e) => { closeBmMenus(); (e?.metaKey || e?.ctrlKey || e?.button === 1) ? almac.cmd('open', b.url) : almac.cmd('openHere', b.url) }
+const bookmarkCtx = (b, e) => {
+  e.preventDefault()
+  e.stopPropagation()
+  closeBmMenus(1) // tutup submenu, biarkan menu induk
+  ctxMenu(e.clientX, e.clientY, [
+    { icon: 'external', label: 'Buka di tab baru', onClick: () => { closeBmMenus(); almac.cmd('open', b.url) } },
+    { icon: 'edit', label: 'Edit…', onClick: () => { closeBmMenus(); editBookmark(b) } },
+    { icon: 'copy', label: 'Salin URL', onClick: () => navigator.clipboard.writeText(b.url) },
+    '-',
+    { icon: 'trash', label: 'Hapus bookmark', danger: true, onClick: () => { closeBmMenus(); almac.cmd('bookmarkRemove', b.id) } },
+  ], { cover: true })
+}
+const newFolder = async (path = []) => {
+  const title = await promptModal('Folder baru', path.length ? 'Di dalam: ' + path.join(' / ') : 'Di bookmark bar', '', 'Buat')
+  if (title) almac.cmd('folderAdd', { path, title })
+}
+const folderCtx = (n, e) => {
+  e.preventDefault()
+  e.stopPropagation()
+  closeBmMenus(1)
+  ctxMenu(e.clientX, e.clientY, [
+    { icon: 'folderPlus', label: 'Subfolder baru…', onClick: () => { closeBmMenus(); newFolder(n.path) } },
+    { icon: 'edit', label: 'Ganti nama…', onClick: async () => {
+      closeBmMenus()
+      const newTitle = await promptModal('Ganti nama folder', 'Nama folder', n.name)
+      if (newTitle) almac.cmd('folderRename', { path: n.parentPath, title: n.name, newTitle })
+    } },
+    '-',
+    { icon: 'trash', label: 'Hapus folder…', danger: true, onClick: async () => {
+      closeBmMenus()
+      const count = (function c(x) { return x.children.reduce((s, k) => s + (k.children ? c(k) : 1), 0) })(n)
+      if (await confirmModal('Hapus folder', `Folder "${n.name}" beserta ${count} bookmark di dalamnya akan dihapus.`)) almac.cmd('folderRemove', { path: n.parentPath, title: n.name })
+    } },
+  ], { cover: true })
+}
+// klik kanan area kosong bookmark bar
+$('#bmbar').addEventListener('contextmenu', e => {
+  if (e.target.closest('.bm-item')) return
+  e.preventDefault()
+  ctxMenu(e.clientX, e.clientY, [
+    { icon: 'folderPlus', label: 'Folder baru…', onClick: () => newFolder([]) },
+    { icon: 'star', label: 'Bookmark halaman ini', onClick: () => bookmarkCurrent() },
+    '-',
+    { icon: 'x', label: 'Sembunyikan bookmark bar (⌘⇧B)', onClick: () => almac.cmd('bookmarkBarToggle') },
+  ], { cover: true })
+})
+
+// modal edit bookmark (juga muncul setelah ⌘D / bintang, seperti Chrome)
+async function editBookmark(b, justAdded) {
+  const all = await almac.ask('bookmarks', '')
+  const paths = folderPaths(bmTree(all))
+  const title = el('input', { className: 'field', value: b.title || '', placeholder: 'Nama' })
+  const url = el('input', { className: 'field', value: b.url || '', placeholder: 'https://…', spellcheck: false })
+  const folder = el('select', { className: 'field' }, ...paths.map((p, i) => el('option', { value: i, textContent: p.length ? p.join(' / ') : 'Bookmark bar', selected: p.join('\u0000') === b.path.join('\u0000') })))
+  const addFolder = el('button', { type: 'button', className: 'link', onclick: async () => {
+    const name = await promptModal('Folder baru', 'Di dalam: ' + (paths[folder.value].join(' / ') || 'Bookmark bar'), '', 'Buat')
+    if (name) { almac.cmd('folderAdd', { path: paths[folder.value], title: name }); b = { ...b, title: title.value, url: url.value, path: [...paths[folder.value], name] }; setTimeout(() => editBookmark(b, justAdded), 150) }
+  } }, iconEl('folderPlus'), el('span', { textContent: 'Folder baru' }))
+  openModal(justAdded ? 'Bookmark ditambahkan' : 'Edit bookmark', [
+    el('label', { className: 'row' }, el('span', { textContent: 'Nama' }), title),
+    el('label', { className: 'row' }, el('span', { textContent: 'URL' }), url),
+    el('label', { className: 'row' }, el('span', { textContent: 'Folder' }), folder),
+    addFolder,
+  ], [
+    { label: 'Hapus', danger: true, onClick: () => almac.cmd('bookmarkRemove', b.id) },
+    { label: 'Simpan', primary: true, onClick: () => almac.cmd('bookmarkSave', { id: b.id, title: title.value, url: url.value, path: paths[folder.value] }) },
+  ])
+}
+async function bookmarkCurrent() {
+  const b = await almac.ask('bookmarkCurrent')
+  if (b) editBookmark(b, b.added)
+}
+almac.onBookmarkCurrent(() => bookmarkCurrent())
+
+function closeBmMenus(fromLevel = 0) {
+  bmMenus.splice(fromLevel).forEach(m => m.remove())
+  if (fromLevel === 0) {
+    document.querySelectorAll('.bm-item.open').forEach(b => b.classList.remove('open'))
+    if (!ctxEl) coverPage(false)
+  }
+}
+// menu folder; level 0 di bawah tombol bar, level berikutnya di samping baris folder
+async function openBmMenu(anchor, nodes, level = 0) {
+  closeBmMenus(level)
+  if (level === 0) { await coverPage(true); anchor.classList.add('open') }
+  let hoverTimer
+  const menu = el('div', { className: 'ctx glass bm-menu' }, ...(nodes.length ? nodes.map(n => {
+    if (n.children) {
+      const row = el('button', { type: 'button', className: 'ctx-item', onclick: () => openBmMenu(row, n.children, level + 1), oncontextmenu: e => folderCtx(n, e) },
+        iconEl('folder'), el('span', { textContent: n.name }), iconEl('chevron'))
+      row.onmouseenter = () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => openBmMenu(row, n.children, level + 1), 140) }
+      return row
+    }
+    const row = el('button', { type: 'button', className: 'ctx-item', title: n.url, onclick: e => openBookmark(n, e), onauxclick: e => openBookmark(n, e), oncontextmenu: e => bookmarkCtx(n, e) },
+      favicon(n), el('span', { textContent: n.title || n.url }))
+    row.onmouseenter = () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => closeBmMenus(level + 1), 140) }
+    return row
+  }) : [el('p', { className: 'none', textContent: 'Folder kosong' })]))
+  document.body.append(menu)
+  bmMenus[level] = menu
+  const r = anchor.getBoundingClientRect()
+  let x = level === 0 ? r.left : r.right + 2, y = level === 0 ? r.bottom + 4 : r.top - 4
+  if (x + menu.offsetWidth > innerWidth - 8) x = level === 0 ? innerWidth - menu.offsetWidth - 8 : r.left - menu.offsetWidth - 2 // mentok kanan -> buka ke kiri
+  menu.style.left = Math.max(8, x) + 'px'
+  menu.style.top = Math.max(8, Math.min(y, innerHeight - menu.offsetHeight - 8)) + 'px'
+}
+document.addEventListener('mousedown', e => { if (bmMenus.length && !e.target.closest('.bm-menu, .bm-item, .ctx')) closeBmMenus() })
+addEventListener('blur', () => closeBmMenus())
+
+function renderBar() {
+  bmItems.replaceChildren(...(bmTreeNodes.length ? bmTreeNodes.map(n => {
+    const b = n.children
+      ? el('button', { type: 'button', className: 'bm-item', title: n.name, onclick() { this.classList.contains('open') ? closeBmMenus() : openBmMenu(this, n.children) }, oncontextmenu: e => folderCtx(n, e) }, iconEl('folder'), el('span', { textContent: n.name }))
+      : el('button', { type: 'button', className: 'bm-item', title: n.url, onclick: e => openBookmark(n, e), onauxclick: e => openBookmark(n, e), oncontextmenu: e => bookmarkCtx(n, e) }, favicon(n), el('span', { textContent: n.title || n.url }))
+    b._node = n
+    return b
+  }) : [el('span', { className: 'bm-hint', textContent: 'Belum ada bookmark — tekan ⌘D, atau import dari Chrome/Brave lewat Library.' })]))
+  fitBar()
+}
+// bookmark yang tidak muat disembunyikan dan bisa dibuka lewat tombol »
+function fitBar() {
+  const items = [...bmItems.querySelectorAll('.bm-item')]
+  items.forEach(i => { i.hidden = false })
+  const limit = bmItems.clientWidth
+  const hidden = items.filter(i => i.offsetLeft + i.offsetWidth > limit)
+  hidden.forEach(i => { i.hidden = true })
+  $('#bmMore').hidden = !hidden.length
+  $('#bmMore').onclick = function () { this.classList.contains('open') ? closeBmMenus() : openBmMenu(this, hidden.map(i => i._node)) }
+}
+new ResizeObserver(fitBar).observe(bmItems)
+$('#bmAll').addEventListener('click', () => { libTab = 'bookmarks'; showPanel('history') })
+async function refreshBar(version) {
+  if (version === bmVersion) return
+  bmVersion = version
+  bmTreeNodes = bmTree(await almac.ask('bookmarks', ''))
+  renderBar()
+}
+
+// ---- cari di halaman (⌘F) ----
+const findInput = $('#findInput')
+let findTimer
+function openFind() {
+  document.body.classList.add('find-open')
+  $('#findbar').hidden = false
+  findInput.focus(); findInput.select()
+  if (findInput.value) almac.cmd('find', { text: findInput.value })
+}
+function closeFind() {
+  document.body.classList.remove('find-open')
+  $('#findbar').hidden = true
+  $('#findCount').textContent = ''
+  almac.cmd('findClose')
+}
+const findStep = forward => { if (findInput.value) almac.cmd('find', { text: findInput.value, forward, next: true }) }
+almac.onOpenFind(openFind)
+almac.onFindNext(() => { if ($('#findbar').hidden) { almac.cmd('findOpen'); openFind() } else findStep(true) })
+almac.onFindPrev(() => findStep(false))
+almac.onFindResult(r => {
+  $('#findCount').textContent = findInput.value ? `${r.active}/${r.matches}` : ''
+  $('#findbar').classList.toggle('none-found', !!findInput.value && !r.matches)
+})
+findInput.addEventListener('input', () => { clearTimeout(findTimer); findTimer = setTimeout(() => almac.cmd('find', { text: findInput.value }), 120) })
+findInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); findStep(!e.shiftKey) }
+  if (e.key === 'Escape') closeFind()
+})
+$('#findPrev').addEventListener('click', () => findStep(false))
+$('#findNext').addEventListener('click', () => findStep(true))
+$('#findClose').addEventListener('click', closeFind)
+
+// ---- zoom ----
+$('#zoomBtn').addEventListener('click', e => { e.stopPropagation(); almac.cmd('zoom', 0) })
+
+// ---- split view ----
+const splitter = $('#splitter')
+splitter.addEventListener('pointerdown', e => {
+  e.preventDefault()
+  splitter.setPointerCapture(e.pointerId)
+  document.body.classList.add('resizing')
+  const area = $('#frame').getBoundingClientRect()
+  let frame = 0
+  splitter.onpointermove = ev => {
+    const ratio = Math.min(0.8, Math.max(0.2, (ev.clientX - area.left - GAP_PX / 2) / (area.width - GAP_PX)))
+    document.documentElement.style.setProperty('--split', ratio)
+    cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(() => almac.cmd('splitRatio', ratio))
+  }
+  splitter.onpointerup = () => { splitter.onpointermove = splitter.onpointerup = null; document.body.classList.remove('resizing') }
+})
+splitter.addEventListener('dblclick', () => almac.cmd('splitRatio', 0.5))
+
+const THEME_LABEL = { system: 'Tema: ikut sistem', light: 'Tema: terang', dark: 'Tema: gelap' }
+
+almac.onState(s => {
+  // sidebar: mode & lebar (jangan timpa saat sedang diseret)
+  const hidden = s.sidebar.mode === 'hidden'
+  if (document.body.classList.contains('side-hidden') !== hidden) {
+    document.body.classList.toggle('side-hidden', hidden)
+    if (!hidden) endPeek(true)
+  }
+  if (!document.body.classList.contains('resizing')) document.documentElement.style.setProperty('--sidebar', s.sidebar.width + 'px')
+  document.body.classList.toggle('no-bar', !s.bookmarkBar)
+  refreshBar(s.bookmarksVersion)
+  // pindah tab / buka halaman saat sidebar muncul sementara -> tutup supaya halaman baru terlihat
+  if (peek && lastState && s.url !== lastState.url) endPeek()
+
+  lastState = s
+  const profile = s.profiles.find(p => p.id === s.activeProfile)
+  document.documentElement.style.setProperty('--accent', s.accent || profile.color)
+  $('#actions').setAttribute('partition', 'persist:' + profile.id)
+  if (document.activeElement !== url) url.value = s.url
+  $('#blocked').textContent = s.adblock ? s.blocked : 'OFF'
+  $('#shield').classList.toggle('off', !s.adblock)
+  if ($('#themeBtn').dataset.theme !== s.theme) { $('#themeBtn').dataset.theme = s.theme; $('#themeBtn').replaceChildren(iconEl(s.theme)) }
+  document.body.classList.toggle('split', !!s.split)
+  if (s.split) {
+    if (!document.body.classList.contains('resizing')) document.documentElement.style.setProperty('--split', s.split.ratio)
+    $('#paneA').classList.toggle('active', s.split.activeSide === 0)
+    $('#paneB').classList.toggle('active', s.split.activeSide === 1)
+  }
+  // mode privat
+  const isPrivate = !!s.profiles.find(p => p.id === s.activeProfile)?.ephemeral
+  document.body.classList.toggle('private', isPrivate)
+  $('#privBadge').hidden = !isPrivate
+  $('#starBtn').hidden = isPrivate
+  $('#zoomBtn').hidden = s.zoom === 100
+  $('#zoomBtn').textContent = s.zoom + '%'
+  $('#historyBtn').classList.toggle('busy', s.downloadsActive > 0)
+  if (s.downloadsVersion !== lastDlVersion) { lastDlVersion = s.downloadsVersion; if (panel === 'history' && libTab === 'downloads') loadDownloads() }
+  if (!s.url && !$('#findbar').hidden) closeFind() // halaman kosong: tidak ada yang dicari
+  $('#starBtn').classList.toggle('on', s.bookmarked)
+  $('#starBtn').title = s.bookmarked ? 'Hapus bookmark (⌘D)' : 'Bookmark halaman ini (⌘D)'
+  if (siteBtn.dataset.sec !== s.security) { siteBtn.dataset.sec = s.security; siteBtn.replaceChildren(iconEl(SEC_ICON[s.security])); siteBtn.className = 'site-btn ' + s.security }
+  $('#themeBtn').title = THEME_LABEL[s.theme] + ' (klik untuk ganti)'
+  $('#count').textContent = s.tabs.length
+  // halaman awal: tidak ada tab, atau tab aktif masih kosong (tab baru)
+  const showStart = !s.url
+  $('#empty').hidden = !showStart
+  // fokus ke kolom cari setiap kali pindah ke tab kosong (termasuk ⌘T dari tab kosong lain)
+  const activeId = s.tabs.find(t => t.active)?.id ?? 'none'
+  if (showStart && activeId !== startFocusedFor && document.activeElement !== url && !modalOpen) setTimeout(() => $('#startInput').focus(), 50)
+  startFocusedFor = showStart ? activeId : null
+  $('#startEngine').textContent = s.engineName
+  $('#startInput').placeholder = `Cari di ${s.engineName} atau ketik URL`
+  url.placeholder = `Cari di ${s.engineName} atau ketik URL`
+
+  const wsKey = JSON.stringify([s.workspaces, s.activeWs])
+  if (wsKey !== lastWs) {
+    lastWs = wsKey
+    renderWorkspaces(s)
+    // animasi geser saat pindah workspace
+    if (lastWsId && lastWsId !== s.activeWs) {
+      const i = s.workspaces.findIndex(w => w.id === s.activeWs), j = s.workspaces.findIndex(w => w.id === lastWsId)
+      setDrag(0) // hapus posisi geser sebelum animasi masuk
+      tabsEl.classList.remove('slide-l', 'slide-r')
+      void tabsEl.offsetWidth
+      tabsEl.classList.add(i > j ? 'slide-l' : 'slide-r')
+      playIcon(wsName.querySelector('.wsi'))
+    }
+    lastWsId = s.activeWs
+  }
+
+  // bangun ulang daftar hanya kalau berubah (angka blokir sering berubah -> jangan bikin tab berkedip)
+  const tabsKey = JSON.stringify(s.tabs)
+  if (tabsKey !== lastTabs) { lastTabs = tabsKey; renderTabs(s.tabs) }
+  const extKey = JSON.stringify([s.extensions, s.activeProfile])
+  if (extKey !== lastExt) { lastExt = extKey; renderExtensions(s) }
+  const profilesKey = JSON.stringify([s.profiles, s.activeProfile])
+  if (profilesKey !== lastProfiles) { lastProfiles = profilesKey; renderProfiles(s) }
+})
+
+let lastTabs, lastProfiles, lastExt, lastWs, lastWsId, lastDlVersion, startFocusedFor = null
+
+// toolbar ekstensi yang di-pin: satu baris, scroll ke samping kalau banyak
+const actionsEl = $('#actions')
+function updateActionsFade() {
+  const { scrollLeft, scrollWidth, clientWidth } = actionsEl
+  actionsEl.classList.toggle('fade-l', scrollLeft > 2)
+  actionsEl.classList.toggle('fade-r', scrollLeft + clientWidth < scrollWidth - 2)
+}
+actionsEl.addEventListener('scroll', updateActionsFade)
+actionsEl.addEventListener('wheel', e => {
+  if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return // trackpad geser samping: biarkan native
+  e.preventDefault()
+  actionsEl.scrollLeft += e.deltaY // roda mouse vertikal -> geser samping
+}, { passive: false })
+addEventListener('resize', updateActionsFade)
+
+function renderExtensions(s) {
+  // toolbar: sembunyikan ikon ekstensi yang tidak di-pin (shadow DOM terbuka)
+  const list = $('#actions')
+  // browser-action-list shadow DOM: ekstensi di-render sebagai elemen dengan attribute [data-extension-id] atau id langsung
+  // Pakai ::slotted atau class .action — kita sembunyikan lewat CSS di dalam shadow DOM
+  const hidden = s.extensions.filter(e => !e.pinned).map(e => e.id)
+  let style = list.shadowRoot?.querySelector('style[data-pins]')
+  if (list.shadowRoot) {
+    if (!style) { style = document.createElement('style'); style.dataset.pins = ''; list.shadowRoot.append(style) }
+    // Coba dua format selector: beberapa versi electron-chrome-extensions pakai [data-extension-id], yang lain pakai langsung id
+    const hideRules = hidden.map(id => `[data-extension-id="${id}"], #${id}, [id="${id}"]`).join(',') 
+    style.textContent = (hidden.length ? `${hideRules}{display:none!important}` : '') + '.action{flex:none;width:32px;height:32px;border-radius:8px}'
+  }
+  list.classList.toggle('has', s.extensions.some(e => e.enabled && e.pinned))
+  requestAnimationFrame(updateActionsFade)
+
+  const partition = encodeURIComponent('persist:' + s.activeProfile)
+  $('#extList').replaceChildren(...(s.extensions.length ? s.extensions.map(e => {
+    const icon = el('img', { className: 'ico', src: `crx://extension-icon/${e.id}/32/2?tabId=-1&partition=${partition}`, onerror() { this.replaceWith(el('i', { className: 'ico', textContent: e.name[0] })) } })
+    const sw = el('button', { className: 'switch' + (e.enabled ? ' on' : ''), title: e.enabled ? 'Nonaktifkan' : 'Aktifkan', onclick: () => almac.cmd('extToggle', e.id) })
+    sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', e.enabled)
+    const btn = (icon, title, cmd, extra = '') => el('button', { className: 'mini ' + extra, title, onclick: () => cmd() }, iconEl(icon))
+    // klik ikon/nama = jalankan ekstensi (popup / aksi), juga untuk yang tidak di-pin
+    const run = el('button', {
+      type: 'button', className: 'ext-run', disabled: !e.enabled,
+      title: e.enabled ? 'Klik untuk menjalankan ' + e.name : 'Aktifkan dulu untuk memakai',
+      onclick() {
+        const r = this.getBoundingClientRect()
+        browserAction.activate('persist:' + s.activeProfile, {
+          eventType: 'click', extensionId: e.id, tabId: -1, alignment: 'bottom right',
+          anchorRect: { x: r.left, y: r.top, width: r.width, height: r.height },
+        })
+      },
+    }, icon, el('div', { className: 'meta' }, el('b', { textContent: e.name }), el('small', { textContent: e.enabled ? 'v' + e.version + ' · klik untuk buka' : 'v' + e.version + ' · nonaktif' })))
+    return el('div', { className: 'ext' + (e.enabled ? '' : ' off') },
+      run,
+      e.enabled ? btn('pin', e.pinned ? 'Lepas pin dari toolbar' : 'Pin ke toolbar', () => almac.cmd('extPin', e.id), e.pinned ? 'on' : '') : '',
+      e.options ? btn('gear', 'Opsi', () => almac.cmd('extOptions', e.id)) : '',
+      btn('trash', 'Hapus', async () => { if (await confirmModal('Hapus ekstensi', `"${e.name}" akan di-uninstall dari profil ini.`)) almac.cmd('extRemove', e.id) }, 'danger'),
+      sw)
+  }) : [el('p', { className: 'none', textContent: 'Belum ada ekstensi. Pasang dari Chrome Web Store.' })]))
+}
+const seen = new Set()
+function renderTabs(tabs) {
+  $('#tabs').replaceChildren(...tabs.map(t => {
+    const fav = el('div', { className: 'fav' }, t.favicon
+      ? el('img', { src: t.favicon, onerror() { this.replaceWith(el('i')) } })
+      : el('i'))
+    const x = el('button', { className: 'x', title: 'Tutup (⌘W)', onclick: e => { e.stopPropagation(); almac.cmd('close', t.id) } }, iconEl('x'))
+    return el('div', {
+      className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (seen.has(t.id) ? '' : ' new'),
+      title: t.sleeping ? t.url + '\n(tidur, hemat RAM)' : t.url,
+      onclick: () => almac.cmd('select', t.id),
+      oncontextmenu: e => {
+        e.preventDefault()
+        const others = lastState.workspaces.filter(w => w.id !== lastState.activeWs)
+        ctxMenu(e.clientX, e.clientY, [
+          ...others.map(w => ({ icon: 'move', label: 'Pindah ke ' + w.name, onClick: () => almac.cmd('tabMove', { id: t.id, wsId: w.id }) })),
+          ...(others.length ? ['-'] : []),
+          { icon: 'copy', label: 'Salin URL', onClick: () => almac.cmd('copyUrl', t.id) },
+          '-',
+          ...(t.split
+            ? [{ icon: 'split', label: 'Keluar dari split view', onClick: () => almac.cmd('unsplit', t.id) }]
+            : [{ icon: 'split', label: 'Split dengan tab baru', onClick: () => almac.cmd('splitNew', t.id) },
+               ...lastState.tabs.filter(o => o.id !== t.id && !o.split).slice(0, 6).map(o => ({ icon: 'split', label: 'Split dengan: ' + o.title, onClick: () => almac.cmd('splitWith', { id: t.id, other: o.id }) }))]),
+          '-',
+          { icon: 'moon', label: 'Tidurkan tab ini', disabled: t.active || t.sleeping, onClick: () => almac.cmd('sleepTab', t.id) },
+          { icon: 'moon', label: 'Tidurkan tab lain', onClick: () => almac.cmd('sleepOthers', t.id) },
+          { icon: 'x', label: 'Tutup tab', danger: true, onClick: () => almac.cmd('close', t.id) },
+        ])
+      },
+    }, fav, el('span', { textContent: t.title }), ...(t.split ? [el('span', { className: 'split-mark', title: 'Split view' }, iconEl('split'))] : []), ...(t.sleeping ? [el('em', { className: 'zz', textContent: 'zz' })] : []), x)
+  }))
+  tabs.forEach(t => seen.add(t.id))
+}
+
+function editProfile(p) {
+  const draft = { name: p.name, color: p.color, icon: p.icon || '' }
+  const preview = el('div', { className: 'icon-preview', title: 'Klik untuk memutar animasi' })
+  const setPreview = play => {
+    preview.replaceChildren(draft.icon ? wsIcon(draft.icon) : el('span', { className: 'wsi letter', textContent: (draft.name.trim()[0] || '?').toUpperCase() }))
+    preview.style.setProperty('--c', draft.color)
+    if (play) { preview.classList.remove('bump'); void preview.offsetWidth; preview.classList.add('bump'); playIcon(preview.firstChild) }
+  }
+  preview.onclick = () => setPreview(true)
+  const name = el('input', { className: 'field', value: draft.name, maxLength: 24, oninput: () => { draft.name = name.value; if (!draft.icon) setPreview() } })
+  const [search, grid] = iconPicker(draft, () => setPreview(true))
+  const custom = el('input', { type: 'color', className: 'pick-color', value: draft.color, title: 'Warna lain' })
+  const colors = el('div', { className: 'picker' }, ...WS_COLORS.filter(Boolean).map(c => {
+    const b = el('button', { type: 'button', className: 'pick swatch' + (c === draft.color ? ' on' : ''), title: c, onclick() {
+      draft.color = c; colors.querySelectorAll('.pick').forEach(x => x.classList.toggle('on', x === this)); custom.classList.remove('on'); setPreview()
+    } })
+    b.style.setProperty('--c', c)
+    return b
+  }), custom)
+  custom.oninput = () => { draft.color = custom.value; colors.querySelectorAll('.pick').forEach(x => x.classList.remove('on')); custom.classList.add('on'); setPreview() }
+  if (!WS_COLORS.includes(draft.color)) custom.classList.add('on')
+  setPreview()
+  openModal('Edit profil', [
+    el('div', { className: 'preview-row' }, preview, el('label', { className: 'row' }, el('span', { textContent: 'Nama' }), name)),
+    el('div', { className: 'row' }, el('span', { textContent: 'Warna' }), colors),
+    el('div', { className: 'row' }, el('span', { textContent: 'Ikon (opsional, menggantikan huruf)' }), search, grid),
+  ], [
+    { label: 'Batal' },
+    { label: 'Simpan', primary: true, onClick: () => almac.cmd('profileUpdate', { id: p.id, ...draft }) },
+  ])
+}
+
+// ---- pengaturan ----
+function openSettings(initialTab = 'general') {
+  const s = lastState
+  let activeTab = initialTab
+
+  // ---- Tab: Umum ----
+  function tabGeneral() {
+    const engines = el('div', { className: 'engine-list' }, ...s.engines.map(e => {
+      const radio = el('input', { type: 'radio', name: 'engine', checked: e.id === s.searchEngine, onchange: () => almac.cmd('setting', { key: 'searchEngine', value: e.id }) })
+      return el('label', { className: 'import-src' }, radio, el('div', { className: 'meta' }, el('b', { textContent: e.name })))
+    }))
+    const ntp = el('div', { className: 'seg' }, ...[['almac', 'Halaman Almac'], ['engine', 'Beranda mesin pencari']].map(([v, t]) => el('button', {
+      type: 'button', className: v === s.newTabPage ? 'on ask' : '', textContent: t,
+      onclick() { almac.cmd('setting', { key: 'newTabPage', value: v }); ntp.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
+    })))
+    const sleepSeg = el('div', { className: 'seg' }, ...[[5, '5 mnt'], [10, '10 mnt'], [30, '30 mnt'], [0, 'Jangan']].map(([v, t]) => el('button', {
+      type: 'button', className: v === s.sleepAfter ? 'on ask' : '', textContent: t,
+      onclick() { almac.cmd('setting', { key: 'sleepAfter', value: v }); sleepSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
+    })))
+    const bar = el('input', { type: 'checkbox', checked: s.bookmarkBar, onchange: () => almac.cmd('setting', { key: 'bookmarkBar', value: bar.checked }) })
+    return [
+      el('div', { className: 'row' }, el('span', { textContent: 'Mesin pencari' }), engines),
+      el('div', { className: 'row' }, el('span', { textContent: 'Tab baru membuka' }), ntp),
+      el('div', { className: 'row' }, el('span', { textContent: 'Hemat memori: tidurkan tab setelah' }), sleepSeg),
+      el('label', { className: 'check' }, bar, el('span', { textContent: 'Tampilkan bookmark bar (⌘⇧B)' })),
+    ]
+  }
+
+  // ---- Tab: Privasi ----
+  function tabPrivacy() {
+    const dnt = el('input', { type: 'checkbox', checked: !!s.doNotTrack, onchange: () => almac.cmd('setting', { key: 'doNotTrack', value: dnt.checked }) })
+    const cookieSeg = el('div', { className: 'seg' },
+      ...['allow', 'block_third_party', 'block_all'].map((v, i) => {
+        const labels = ['Izinkan semua', 'Blokir pihak ketiga', 'Blokir semua']
+        return el('button', {
+          type: 'button', className: v === (s.cookiePolicy || 'allow') ? 'on ask' : '', textContent: labels[i],
+          onclick() { almac.cmd('setting', { key: 'cookiePolicy', value: v }); cookieSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
+        })
+      })
+    )
+    const jsCheck = el('input', { type: 'checkbox', checked: !!s.blockJavaScript, onchange: () => almac.cmd('setting', { key: 'blockJavaScript', value: jsCheck.checked }) })
+    return [
+      el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('shield'), el('span', { textContent: 'Privasi & Keamanan' })),
+        el('label', { className: 'check sett-row' }, dnt, el('span', { textContent: 'Kirim sinyal Do Not Track ke situs web' })),
+        el('div', { className: 'row' }, el('span', { textContent: 'Kebijakan cookie' }), cookieSeg),
+        el('label', { className: 'check sett-row' }, jsCheck, el('span', { textContent: 'Blokir JavaScript di semua situs (tidak disarankan)' })),
+      ),
+      el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('trash'), el('span', { textContent: 'Bersihkan Data' })),
+        el('div', { className: 'row' },
+          el('span', { textContent: 'Hapus data browsing profil ini' }),
+          el('div', { className: 'inline' },
+            el('button', { type: 'button', className: 'danger', onclick: async () => { if (await confirmModal('Hapus cache', 'Cache halaman web akan dihapus. History & bookmark tetap ada.', 'Hapus')) { almac.cmd('clearCache'); } } }, iconEl('trash'), 'Hapus cache'),
+            el('button', { type: 'button', className: 'danger', onclick: async () => { if (await confirmModal('Hapus cookie', 'Semua cookie & data situs akan dihapus. Kamu akan keluar dari semua situs.', 'Hapus')) { almac.cmd('clearCookies'); } } }, iconEl('cookie'), 'Hapus cookie & data situs'),
+          )
+        ),
+      ),
+    ]
+  }
+
+  // ---- Tab: DNS ----
+  function tabDns() {
+    const currentMode = s.dnsMode || 'auto'
+    const dnsInput = el('input', { className: 'field', value: s.customDns || '', placeholder: 'https://dns.google/dns-query', spellcheck: false,
+      oninput() { }, onchange() { almac.cmd('setting', { key: 'customDns', value: this.value }) } })
+    const dnsSave = el('button', { type: 'button', className: '', onclick() { almac.cmd('setting', { key: 'customDns', value: dnsInput.value }) } }, iconEl('check'), 'Simpan')
+    dnsInput.addEventListener('input', () => { dnsInput.style.borderColor = '' })
+    const modeSeg = el('div', { className: 'seg' },
+      ...[
+        ['auto', 'Otomatis (sistem)'], ['doh', 'DNS-over-HTTPS'], ['off', 'Tanpa enkripsi'],
+      ].map(([v, t]) => el('button', {
+        type: 'button', className: v === currentMode ? 'on ask' : '', textContent: t,
+        onclick() {
+          almac.cmd('setting', { key: 'dnsMode', value: v })
+          modeSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '')
+          dnsSection.style.display = v === 'doh' ? '' : 'none'
+        },
+      }))
+    )
+    const dnsSection = el('div', { className: 'row', style: currentMode !== 'doh' ? 'display:none' : '' },
+      el('span', { textContent: 'URL DoH kustom' }),
+      el('div', { className: 'inline' }, dnsInput, dnsSave),
+      el('p', { className: 'modal-text', style: 'font-size:11px;margin-top:2px', textContent: 'Contoh: https://dns.google/dns-query · https://cloudflare-dns.com/dns-query · https://dns.quad9.net/dns-query' }),
+    )
+    const presets = el('div', { className: 'row' },
+      el('span', { textContent: 'Preset DNS cepat' }),
+      el('div', { className: 'dns-presets' },
+        ...[
+          { name: 'Google DNS', url: 'https://dns.google/dns-query' },
+          { name: 'Cloudflare', url: 'https://cloudflare-dns.com/dns-query' },
+          { name: 'Quad9', url: 'https://dns.quad9.net/dns-query' },
+          { name: 'AdGuard', url: 'https://dns.adguard.com/dns-query' },
+          { name: 'NextDNS', url: 'https://dns.nextdns.io' },
+        ].map(p => el('button', {
+          type: 'button', className: 'dns-preset-btn' + (s.customDns === p.url ? ' on' : ''),
+          onclick() {
+            dnsInput.value = p.url
+            almac.cmd('setting', { key: 'customDns', value: p.url })
+            almac.cmd('setting', { key: 'dnsMode', value: 'doh' })
+            modeSeg.querySelectorAll('button').forEach((b, i) => b.className = i === 1 ? 'on ask' : '')
+            dnsSection.style.display = ''
+            this.closest('.dns-presets').querySelectorAll('.dns-preset-btn').forEach(x => x.classList.toggle('on', x === this))
+          },
+        }, p.name))
+      )
+    )
+    return [
+      el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('globe'), el('span', { textContent: 'Pengaturan DNS' })),
+        el('div', { className: 'row' }, el('span', { textContent: 'Mode DNS' }), modeSeg),
+        presets,
+        dnsSection,
+        el('p', { className: 'modal-text', style: 'font-size:11px;line-height:1.6' },
+          'DNS-over-HTTPS (DoH) mengenkripsi permintaan DNS agar ISP tidak bisa memantau atau memblokir situs yang dikunjungi. Pilih salah satu preset atau masukkan URL DoH sendiri.'
+        ),
+      ),
+    ]
+  }
+
+  // ---- Tab: Profil & Akun ----
+  function tabProfile() {
+    const profile = s.profiles.find(p => p.id === s.activeProfile)
+    return [
+      el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('user'), el('span', { textContent: 'Profil Aktif: ' + profile.name })),
+        el('div', { className: 'row' },
+          el('span', { textContent: 'Profil aktif' }),
+          el('button', { type: 'button', className: 'link', onclick: () => { closeModal(); setTimeout(() => editProfile(profile), 80) } },
+            iconEl('user'), el('span', { textContent: `Edit profil "${profile.name}" (nama, warna, ikon)` }))
+        ),
+        el('div', { className: 'row' },
+          el('span', { textContent: 'Akun Google' }),
+          el('div', { className: 'inline' },
+            el('button', { type: 'button', onclick: () => { closeModal(); almac.cmd('navigate', 'https://accounts.google.com/') } }, iconEl('user'), 'Login / Kelola akun Google'),
+            el('button', { type: 'button', onclick: () => { closeModal(); almac.cmd('navigate', 'https://myaccount.google.com/') } }, iconEl('gear'), 'Google My Account'),
+          ),
+        ),
+        el('div', { className: 'row' },
+          el('span', { textContent: 'Password tersimpan' }),
+          el('button', { type: 'button', onclick: () => almac.cmd('passwords') }, iconEl('key'), 'Buka Passwords.app (iCloud Keychain)'),
+        ),
+        ...(s.profiles.length > 1 ? [
+          el('div', { className: 'row danger-zone' },
+            el('span', { textContent: `${s.profiles.length} profil` }),
+            el('div', { className: 'inline' },
+              ...s.profiles.filter(p => !p.ephemeral).map(p =>
+                el('button', { type: 'button', className: p.id === s.activeProfile ? 'primary' : '',
+                  onclick: () => almac.cmd('switchProfile', p.id),
+                  style: `--c:${p.color}; border-left: 4px solid ${p.color}` },
+                  el('span', { textContent: p.name + (p.id === s.activeProfile ? ' ✓' : '') })
+                )
+              )
+            )
+          ),
+        ] : []),
+      ),
+      el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('shield'), el('span', { textContent: 'Sesi & Data Profil' })),
+        el('div', { className: 'row' },
+          el('span', { textContent: 'Data sesi' }),
+          el('div', { className: 'inline' },
+            el('button', { type: 'button', onclick: async () => {
+              if (await confirmModal('Hapus semua data profil ini', `History, cookie, cache, dan login profil "${profile.name}" akan dihapus.`, 'Hapus')) {
+                almac.cmd('clearAll')
+              }
+            }}, iconEl('trash'), 'Hapus semua data profil ini'),
+          )
+        ),
+      ),
+    ]
+  }
+
+  // ---- Bangun modal dengan tab ----
+  const TABS = [
+    { id: 'general', label: 'Umum', icon: 'gear' },
+    { id: 'privacy', label: 'Privasi', icon: 'shield' },
+    { id: 'dns', label: 'DNS & Jaringan', icon: 'globe' },
+    { id: 'profile', label: 'Profil & Akun', icon: 'user' },
+  ]
+  const content = el('div', { className: 'sett-content' })
+  const tabBtns = el('div', { className: 'sett-tabs' })
+  function switchTab(id) {
+    activeTab = id
+    tabBtns.querySelectorAll('.sett-tab-btn').forEach(b => b.classList.toggle('on', b.dataset.tab === id))
+    const fns = { general: tabGeneral, privacy: tabPrivacy, dns: tabDns, profile: tabProfile }
+    content.replaceChildren(...(fns[id]?.() || []))
+  }
+  TABS.forEach(t => {
+    const b = el('button', { type: 'button', className: 'sett-tab-btn' + (t.id === activeTab ? ' on' : ''), 'data-tab': t.id,
+      onclick: () => switchTab(t.id) }, iconEl(t.icon), el('span', { textContent: t.label }))
+    b.dataset.tab = t.id
+    tabBtns.append(b)
+  })
+  switchTab(activeTab)
+  openModal('Pengaturan Almac', [
+    tabBtns,
+    content,
+  ], [{ label: 'Selesai', primary: true }])
+}
+$('#settingsBtn').addEventListener('click', () => openSettings())
+almac.onOpenSettings(() => openSettings())
+
+// ---- halaman awal Almac (tidak ada tab / tab baru) ----
+$('#startForm').addEventListener('submit', e => e.preventDefault()) // Enter ditangani attachSuggest
+attachSuggest($('#startInput'), $('#startSuggest'))
+$('#startEngine').addEventListener('click', () => openSettings())
+
+function renderProfiles(s) {
+  $('#profiles').replaceChildren(
+    ...s.profiles.map(p => {
+      const b = el('button', {
+        className: 'avatar' + (p.id === s.activeProfile ? ' active' : ''),
+        title: p.name + ' — klik kanan untuk edit',
+        onclick: () => almac.cmd('switchProfile', p.id),
+        oncontextmenu: e => {
+          e.preventDefault()
+          if (p.ephemeral) return ctxMenu(e.clientX, e.clientY, [{ icon: 'x', label: 'Tutup sesi privat (hapus semua datanya)', danger: true, onClick: () => almac.cmd('closePrivate') }])
+          ctxMenu(e.clientX, e.clientY, [
+            { icon: 'edit', label: 'Edit profil…', onClick: () => editProfile(p) },
+            '-',
+            { icon: 'trash', label: 'Hapus profil…', danger: true, disabled: s.profiles.length < 2, onClick: async () => {
+              if (await confirmModal('Hapus profil', `Profil "${p.name}" beserta login, tab, history, bookmark, dan ekstensinya akan dihapus.`)) almac.cmd('removeProfile', p.id)
+            } },
+          ])
+        },
+      }, ...(p.icon && ICON_SET[p.icon] ? [wsIcon(p.icon)] : [p.name[0].toUpperCase()]))
+      b.style.setProperty('--c', p.color)
+      return b
+    }),
+    el('button', {
+      className: 'avatar add', title: 'Tambah profil (login Google) — klik kanan: tab privat',
+      onclick: () => { $('#newProfile').classList.toggle('open'); $('#pname').focus() },
+      oncontextmenu: e => { e.preventDefault(); ctxMenu(e.clientX, e.clientY, [{ icon: 'private', label: 'Tab privat baru (⌘⇧N)', onClick: () => almac.cmd('openPrivate') }]) },
+    }, iconEl('plus')),
+  )
+}
+
+almac.cmd('ready')
+</script>
+</body>
+</html>

@@ -1,0 +1,1160 @@
+const { app, BrowserWindow, WebContentsView, session, ipcMain, Menu, nativeTheme, dialog, clipboard, shell, screen } = require('electron')
+const path = require('path')
+const fs = require('fs')
+const { ElectronChromeExtensions } = require('electron-chrome-extensions')
+const { installChromeWebStore, uninstallExtension } = require('electron-chrome-web-store')
+const { ElectronBlocker } = require('@ghostery/adblocker-electron')
+const { getDomain } = require('tldts-experimental')
+
+app.setName('Almac Browser')
+app.setAboutPanelOptions({ applicationName: 'Almac Browser', applicationVersion: app.getVersion(), iconPath: path.join(__dirname, 'build', 'icon.png') })
+// Satu instance saja: dua instance di folder data yang sama bisa merusak database (cookies, service worker)
+if (!app.requestSingleInstanceLock()) app.exit(0)
+app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus() } })
+const DATA = app.getPath('userData')
+const STATE_FILE = path.join(DATA, 'state.json')
+const HISTORY_FILE = path.join(DATA, 'history.json')
+const HISTORY_MAX = 20000
+const BOOKMARKS_FILE = path.join(DATA, 'bookmarks.json')
+const DOWNLOADS_FILE = path.join(DATA, 'downloads.json')
+const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
+const SIDEBAR = 248 // lebar awal sidebar; bisa diubah dengan menyeret (state.sidebar.width)
+const SIDEBAR_MIN = 236, SIDEBAR_MAX = 420 // min: muat tombol jendela + logo + 5 tombol status
+const PAGE_MIN = 360 // halaman selalu punya ruang minimal ini; sidebar mengecil kalau jendela sempit
+const GAP = 10 // samakan dengan --gap
+// mesin pencari (Pengaturan). suggest: endpoint OpenSearch milik mesin itu sendiri -> ketikan tidak bocor ke mesin lain
+const ENGINES = {
+  google: { name: 'Google', search: 'https://www.google.com/search?q=', home: 'https://www.google.com', suggest: 'https://suggestqueries.google.com/complete/search?client=chrome&ie=utf-8&oe=utf-8&q=' },
+  duckduckgo: { name: 'DuckDuckGo', search: 'https://duckduckgo.com/?q=', home: 'https://duckduckgo.com', suggest: 'https://duckduckgo.com/ac/?type=list&q=' },
+  bing: { name: 'Bing', search: 'https://www.bing.com/search?q=', home: 'https://www.bing.com', suggest: 'https://api.bing.com/osjson.aspx?query=' },
+  brave: { name: 'Brave Search', search: 'https://search.brave.com/search?q=', home: 'https://search.brave.com', suggest: 'https://search.brave.com/api/suggest?q=' },
+  startpage: { name: 'Startpage', search: 'https://www.startpage.com/do/search?q=', home: 'https://www.startpage.com' },
+  ecosia: { name: 'Ecosia', search: 'https://www.ecosia.org/search?q=', home: 'https://www.ecosia.org', suggest: 'https://ac.ecosia.org/autocomplete?type=list&q=' },
+}
+const engine = () => ENGINES[state.searchEngine] || ENGINES.google
+
+// UA tanpa "Electron/..." supaya login Google & Chrome Web Store mau menerima
+const UA = app.userAgentFallback.replace(/ (?!Chrome|Safari|AppleWebKit)[\w-]+\/[\d.]+/g, '')
+app.userAgentFallback = UA
+// Login Google ("This browser or app may not be secure"): Google menolak identitas yang tidak konsisten/menyamar.
+// Panduan Google: browser harus mengidentifikasi diri dengan jelas di accounts.google.com. Jadi di sana kirim UA
+// Chromium jujur + token Electron (seperti UA bawaan Electron, tanpa nama app) & Client Hints asli; situs lain UA Chrome.
+// Referensi: nightly-labs/openbot PR #1711 (identifier check gagal tanpa token Electron),
+// developers.googleblog.com "guidance-to-developers-affected-by-our-effort-to-block-less-secure-browsers..."
+const GOOGLE_LOGIN_UA = UA.replace(' Safari/', ` Electron/${process.versions.electron} Safari/`)
+const isGoogleLogin = url => /^https:\/\/accounts\.google\.com\//.test(url)
+
+// ponytail: electron-chrome-extensions tidak menangani EPIPE saat host native messaging (mis. iCloud Passwords)
+// langsung keluar -> seluruh app crash. Abaikan EPIPE saja; hapus kalau library sudah memperbaikinya.
+process.on('uncaughtException', e => {
+  if (e.code === 'EPIPE') return console.warn('native messaging host tertutup:', e.message)
+  console.error(e)
+  dialog.showErrorBox('Almac Browser error', e.stack || String(e))
+})
+
+let win, blocker
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+const ctx = {} // profileId -> { ses, extensions }
+let nextTabId = 1
+let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
+let covered = false   // dropdown bookmark bar terbuka -> halaman diganti snapshot
+const BAR_H = 30 // tinggi bookmark bar (samakan dengan --bar-h di theme.css)
+let findOpen = false // kotak cari di halaman (⌘F) memakai strip atas yang sama dengan bookmark bar
+const barSpace = () => state.bookmarkBar || findOpen ? BAR_H + 6 : 0
+let bookmarksVersion = 0 // naik tiap bookmark berubah -> UI ambil ulang isi bookmark bar
+const nextOrder = () => bookmarks.reduce((m, b) => Math.max(m, b.order), -1) + 1
+let peeking = false   // sidebar tersembunyi sedang muncul sementara (hover tepi kiri) -> halaman diganti snapshot
+// lebar sidebar efektif: preferensi user, dibatasi ukuran jendela
+const sideWidth = () => {
+  const winW = win?.getContentSize()[0] || 1280
+  return Math.max(SIDEBAR_MIN, Math.min(state.sidebar.width, SIDEBAR_MAX, winW - PAGE_MIN - GAP * 2))
+}
+const sideSpace = () => state.sidebar.mode === 'pinned' ? sideWidth() : 0 // ruang sidebar di kiri halaman
+const certs = new Map() // "profileId|hostname" -> sertifikat terakhir yang diverifikasi Chromium
+
+// ---- izin situs (seperti Chrome: tanya dulu, bisa diingat per situs) ----
+const PERM_KIND = { geolocation: 'geolocation', notifications: 'notifications', 'clipboard-read': 'clipboard', openExternal: 'openExternal' }
+const PERM_DENY = new Set(['hid', 'serial', 'usb', 'midiSysex']) // akses perangkat: tolak
+const permKinds = (permission, mediaTypes) => permission === 'media'
+  ? [...new Set((mediaTypes || []).map(t => t === 'video' ? 'camera' : t === 'audio' ? 'microphone' : null))].filter(Boolean)
+  : PERM_KIND[permission] ? [PERM_KIND[permission]] : []
+const sitePermsOf = (profileId, origin) => state.sitePerms[profileId]?.[origin] || {}
+const pendingPerms = new Map()
+let permSeq = 0
+function askPermission(profileId, origin, kinds) {
+  if (!win) return Promise.resolve(false)
+  return new Promise(resolve => {
+    const id = ++permSeq
+    pendingPerms.set(id, { resolve, profileId, origin, kinds })
+    win.webContents.send('perm-request', { id, host: new URL(origin).host, kinds })
+  })
+}
+async function onPermissionRequest(profileId, permission, details) {
+  if (PERM_DENY.has(permission)) return false
+  const kinds = permKinds(permission, details.mediaTypes)
+  if (!kinds.length) return true // izin ringan (fullscreen, dsb.) tetap diizinkan seperti bawaan Electron
+  let origin
+  try { origin = new URL(details.requestingUrl).origin } catch { return false }
+  const saved = sitePermsOf(profileId, origin)
+  if (kinds.some(k => saved[k] === 'block')) return false
+  if (kinds.every(k => saved[k] === 'allow')) return true
+  return askPermission(profileId, origin, kinds)
+}
+const SITE_STORAGES = ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'filesystem', 'shadercache', 'websql']
+let history = [] // {url, title, ts, n (jumlah kunjungan), p (profileId)}
+// link: {id, url, title, path, order, ts, p}; folder: {id, folder: true, title, path, order, p}
+// path = folder induk, mis. ['Kerja', 'Tools']; [] = langsung di bookmark bar
+let bookmarks = []
+// unduhan: {id, filename, path, url, total, received, state: progressing|paused|completed|cancelled|interrupted, ts, p}
+let downloads = []
+const liveDownloads = new Map() // id -> DownloadItem (hanya selama sesi)
+let downloadsVersion = 0, downloadTimer
+
+function load() {
+  try { state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) } } catch {}
+  if (!state.profiles.length) state.profiles.push({ id: 'p1', name: 'Pribadi', color: '#41a6f6' })
+  if (!state.profiles.some(p => p.id === state.activeProfile)) state.activeProfile = state.profiles[0].id
+  state.profiles.forEach(workspaces)
+  state.tabs = state.tabs.map(t => ({
+    ...t, id: nextTabId++, view: null, blocked: 0, // dipulihkan dalam kondisi tidur
+    wsId: profileOf(t.profileId)?.workspaces.some(w => w.id === t.wsId) ? t.wsId : profileOf(t.profileId)?.workspaces[0].id,
+  }))
+  try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) } catch {}
+  try { bookmarks = JSON.parse(fs.readFileSync(BOOKMARKS_FILE, 'utf8')) } catch {}
+  try { downloads = JSON.parse(fs.readFileSync(DOWNLOADS_FILE, 'utf8')).map(d => d.state === 'progressing' || d.state === 'paused' ? { ...d, state: 'interrupted' } : d) } catch {}
+  bookmarks.forEach((b, i) => { if (typeof b.folder === 'string') { b.path = b.folder ? b.folder.split(' / ') : []; delete b.folder } b.path ||= []; b.order ??= i }) // format lama
+}
+
+const uid = prefix => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+const hostOf = url => { try { return new URL(url).hostname } catch { return '' } }
+const profileOf = id => state.profiles.find(p => p.id === id)
+// ikon emoji versi lama -> ikon Lucide animasi
+const EMOJI_ICON = {
+  '💼': 'briefcase', '🏠': 'house', '💻': 'laptop', '🎮': 'gamepad', '📚': 'book-open', '🎓': 'graduation-cap', '🎵': 'music',
+  '🎬': 'clapperboard', '🛒': 'shopping-cart', '🎨': 'palette', '✈️': 'plane', '💡': 'lightbulb', '☕': 'coffee', '⭐': 'star',
+  '🔥': 'flame', '🌙': 'moon', '❤️': 'heart',
+}
+// tiap profil punya workspace (grup tab), minimal satu
+function workspaces(p) {
+  if (!p.workspaces?.length) p.workspaces = [{ id: uid('w'), name: 'Utama' }]
+  p.workspaces.forEach(w => { if (EMOJI_ICON[w.icon]) w.icon = EMOJI_ICON[w.icon] })
+  if (!p.workspaces.some(w => w.id === p.activeWs)) p.activeWs = p.workspaces[0].id
+  return p.workspaces
+}
+const activeWs = (profileId = state.activeProfile) => profileOf(profileId).activeWs
+
+let historyTimer
+function saveHistory() {
+  clearTimeout(historyTimer)
+  historyTimer = setTimeout(() => fs.writeFile(HISTORY_FILE, JSON.stringify(history), () => {}), 2000)
+}
+
+function downloadsChanged() { // progres sering berubah -> simpan & render dibatasi
+  downloadsVersion++
+  if (downloadTimer) return
+  downloadTimer = setTimeout(() => {
+    downloadTimer = null
+    downloads = downloads.slice(-200)
+    const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
+    fs.writeFile(DOWNLOADS_FILE, JSON.stringify(downloads.filter(d => !priv.has(d.p))), () => {})
+    render()
+  }, 300)
+}
+function uniquePath(dir, name) {
+  const ext = path.extname(name), base = path.basename(name, ext)
+  let p = path.join(dir, name)
+  for (let i = 1; fs.existsSync(p); i++) p = path.join(dir, `${base} (${i})${ext}`)
+  return p
+}
+
+let bookmarkTimer
+function saveBookmarks() {
+  bookmarksVersion++
+  clearTimeout(bookmarkTimer)
+  bookmarkTimer = setTimeout(() => fs.writeFile(BOOKMARKS_FILE, JSON.stringify(bookmarks), () => {}), 1000)
+}
+const isBookmarked = (profileId, url) => bookmarks.some(b => b.p === profileId && !b.folder && b.url === url)
+const samePath = (a, b) => a.length === b.length && a.every((x, i) => x === b[i])
+const startsWith = (path, prefix) => prefix.every((x, i) => path[i] === x)
+
+// ---- import dari browser Chromium lain di perangkat ini (Chrome, Brave, Edge, Arc, Vivaldi) ----
+const CHROMIUM_BROWSERS = {
+  chrome: ['Google Chrome', 'Google/Chrome'], brave: ['Brave', 'BraveSoftware/Brave-Browser'], edge: ['Microsoft Edge', 'Microsoft Edge'],
+  arc: ['Arc', 'Arc/User Data'], vivaldi: ['Vivaldi', 'Vivaldi'], chromium: ['Chromium', 'Chromium'],
+}
+const browserDir = key => path.join(app.getPath('appData'), CHROMIUM_BROWSERS[key][1])
+const chromeTime = t => Math.round(Number(t) / 1000 - 11644473600000) // date_added bookmark (string mikrodetik sejak 1601) -> ms unix
+
+function importSources() {
+  const out = []
+  for (const [key, [label]] of Object.entries(CHROMIUM_BROWSERS)) {
+    let profiles
+    try { profiles = JSON.parse(fs.readFileSync(path.join(browserDir(key), 'Local State'), 'utf8')).profile?.info_cache } catch { continue }
+    for (const [dir, info] of Object.entries(profiles || {})) {
+      const has = f => fs.existsSync(path.join(browserDir(key), dir, f))
+      if (has('Bookmarks') || has('History')) out.push({ browser: key, label, dir, name: info.name, email: info.user_name || '', bookmarks: has('Bookmarks'), history: has('History') })
+    }
+  }
+  return out
+}
+
+async function importRun({ browser, dir, bookmarks: wantBookmarks, history: wantHistory }) {
+  // hanya profil yang memang terdeteksi (jangan baca path sembarang dari UI)
+  if (!importSources().some(s => s.browser === browser && s.dir === dir)) throw new Error('Sumber import tidak dikenal')
+  const base = path.join(browserDir(browser), dir)
+  const label = CHROMIUM_BROWSERS[browser][0]
+  const profileId = state.activeProfile
+  const result = { bookmarks: 0, history: 0 }
+
+  if (wantBookmarks && fs.existsSync(path.join(base, 'Bookmarks'))) {
+    const roots = JSON.parse(fs.readFileSync(path.join(base, 'Bookmarks'), 'utf8')).roots
+    const have = new Set(bookmarks.filter(b => b.p === profileId).map(b => b.url))
+    let order = nextOrder()
+    const walk = (node, folderPath) => {
+      if (node.type === 'url') {
+        if (have.has(node.url)) return
+        have.add(node.url)
+        bookmarks.push({ id: uid('b'), url: node.url, title: node.name, path: folderPath, order: order++, ts: chromeTime(node.date_added) || Date.now(), p: profileId })
+        result.bookmarks++
+      } else {
+        // folder ikut disimpan (folder kosong & urutan tetap terjaga), kecuali sudah ada
+        if (!bookmarks.some(b => b.p === profileId && b.folder && b.title === node.name && samePath(b.path, folderPath)))
+          bookmarks.push({ id: uid('f'), folder: true, title: node.name, path: folderPath, order: order++, p: profileId })
+        for (const child of node.children || []) walk(child, [...folderPath, node.name])
+      }
+    }
+    // struktur & urutan asli: isi "Bookmarks bar" -> bookmark bar Almac, lainnya ke folder sendiri
+    for (const child of roots.bookmark_bar?.children || []) walk(child, [])
+    for (const child of roots.other?.children || []) walk(child, ['Bookmark lain'])
+    for (const child of roots.synced?.children || []) walk(child, ['Bookmark seluler'])
+    saveBookmarks()
+  }
+
+  if (wantHistory && fs.existsSync(path.join(base, 'History'))) {
+    // DB terkunci saat browser sumber berjalan -> salin dulu, file asli tidak disentuh
+    const tmp = fs.mkdtempSync(path.join(app.getPath('temp'), 'almac-import-'))
+    try {
+      for (const f of ['History', 'History-wal', 'History-journal']) if (fs.existsSync(path.join(base, f))) fs.copyFileSync(path.join(base, f), path.join(tmp, f))
+      const { DatabaseSync } = require('node:sqlite')
+      const db = new DatabaseSync(path.join(tmp, 'History'))
+      // waktu Chrome (mikrodetik sejak 1601) terlalu besar untuk number JS -> konversi ke ms unix di SQL
+      const rows = db.prepare('SELECT url, title, visit_count, (last_visit_time / 1000 - 11644473600000) AS ts FROM urls WHERE hidden = 0 ORDER BY last_visit_time DESC LIMIT ?').all(HISTORY_MAX)
+      db.close()
+      const mine = new Map(history.filter(h => h.p === profileId).map(h => [h.url, h]))
+      for (const r of rows) {
+        if (!/^https?:/.test(r.url)) continue
+        const ts = r.ts, h = mine.get(r.url)
+        if (h) { h.ts = Math.max(h.ts, ts); h.n += r.visit_count; h.title ||= r.title; continue }
+        const entry = { url: r.url, title: r.title, ts, n: r.visit_count, p: profileId }
+        history.push(entry); mine.set(r.url, entry); result.history++
+      }
+      if (history.length > HISTORY_MAX) history = history.sort((a, b) => b.ts - a.ts).slice(0, HISTORY_MAX)
+      saveHistory()
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  }
+  render(true)
+  return result
+}
+
+function addHistory(t, visit) {
+  if (!/^https?:/.test(t.url) || profileOf(t.profileId)?.ephemeral) return // privat: tidak dicatat
+  let h = history.find(h => h.url === t.url && h.p === t.profileId)
+  if (!h) { h = { url: t.url, title: '', ts: 0, n: 0, p: t.profileId }; history.push(h) }
+  h.title = t.title || h.title
+  h.ts = Date.now()
+  if (visit) h.n++
+  if (history.length > HISTORY_MAX) history = history.sort((a, b) => b.ts - a.ts).slice(0, HISTORY_MAX)
+  saveHistory()
+}
+
+let renderTimer
+function render(now) {
+  if (now === true) { clearTimeout(renderTimer); renderTimer = null; return flush() }
+  if (!renderTimer) renderTimer = setTimeout(() => { renderTimer = null; flush() }, 100)
+}
+function flush() {
+  if (!win) return // jendela sudah ditutup (saat keluar app)
+  const active = activeTab()
+  win.webContents.send('state', {
+    profiles: state.profiles,
+    activeProfile: state.activeProfile,
+    workspaces: profileOf(state.activeProfile).workspaces.map(w => ({
+      ...w, tabs: state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === w.id).length,
+    })),
+    activeWs: activeWs(),
+    accent: profileOf(state.activeProfile).workspaces.find(w => w.id === activeWs())?.color || profileOf(state.activeProfile).color,
+    tabs: state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === activeWs()).map(t => ({
+      id: t.id, title: t.title || t.url || 'Tab baru', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
+    })),
+    url: active?.url || '',
+    security: security(active),
+    bookmarked: !!active && isBookmarked(active.profileId, active.url),
+    blocked: active?.blocked || 0,
+    adblock: !!blocker,
+    theme: state.theme,
+    sidebar: { ...state.sidebar, width: sideWidth() },
+    bookmarkBar: state.bookmarkBar,
+    split: (() => { const v = visibleTabs(); return v.length === 2 ? { ratio: state.splitRatio[v[0].group] ?? 0.5, activeSide: v.indexOf(activeTab()) } : null })(),
+    zoom: Math.round((state.zoom[hostOf(active?.url)] || 1) * 100),
+    downloadsVersion, downloadsActive: downloads.filter(d => d.state === 'progressing').length,
+    searchEngine: state.searchEngine, engineName: engine().name, newTabPage: state.newTabPage, sleepAfter: state.sleepAfter,
+    engines: Object.entries(ENGINES).map(([id, e]) => ({ id, name: e.name })),
+    bookmarksVersion: bookmarksVersion + '|' + state.activeProfile,
+    extensions: extList(state.activeProfile),
+    customDns: state.customDns || '', dnsMode: state.dnsMode || 'auto',
+    blockJavaScript: !!state.blockJavaScript, cookiePolicy: state.cookiePolicy || 'allow',
+    doNotTrack: !!state.doNotTrack, hardwareAcceleration: state.hardwareAcceleration !== false,
+  })
+  // profil privat tidak pernah ditulis ke disk
+  const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
+  const tabs = state.tabs.filter(t => !priv.has(t.profileId)).map(({ profileId, wsId, url, title, favicon, lastActive, group }) => ({ profileId, wsId, url, title, favicon, lastActive, group }))
+  const profiles = state.profiles.filter(p => !p.ephemeral)
+  const sitePerms = Object.fromEntries(Object.entries(state.sitePerms).filter(([id]) => !priv.has(id)))
+  const activeProfile = priv.has(state.activeProfile) ? profiles[0]?.id : state.activeProfile
+  fs.writeFile(STATE_FILE, JSON.stringify({ ...state, tabs, profiles, sitePerms, activeProfile }), () => {})
+}
+
+// ikon di kolom alamat: secure (https), insecure (http), neutral (internal/kosong)
+function security(t) {
+  if (!t?.url) return 'neutral'
+  if (t.url.startsWith('http:')) return 'insecure'
+  if (!t.url.startsWith('https:')) return 'neutral'
+  // sertifikat tidak valid sudah ditolak Electron, jadi https yang termuat = aman kecuali tercatat gagal verifikasi
+  const cert = certs.get(t.profileId + '|' + t.url.split('/')[2]?.split(':')[0])
+  return !cert || cert.result === 'net::OK' ? 'secure' : 'insecure'
+}
+
+function profileCtx(profileId) {
+  if (ctx[profileId]) return ctx[profileId]
+  // profil privat: partisi tanpa "persist:" = hanya di memori, hilang saat ditutup / app keluar
+  const ses = session.fromPartition(profileOf(profileId)?.ephemeral ? 'private-' + profileId : 'persist:' + profileId)
+  ses.setUserAgent(UA)
+  ses.setSpellCheckerEnabled(false)
+  // navigasi + XHR/fetch: login Google = UA dengan token Electron (Client Hints asli tetap dikirim);
+  // situs lain tidak diubah, kecuali dipastikan kembali ke UA Chrome setelah keluar dari halaman login
+  ses.webRequest.onBeforeSendHeaders({ urls: ['<all_urls>'], types: ['mainFrame', 'subFrame', 'xhr'] }, (details, callback) => {
+    const login = isGoogleLogin(details.url)
+    if (!login && details.requestHeaders['User-Agent'] !== GOOGLE_LOGIN_UA) return callback({}) // jalur cepat: tidak diubah
+    const headers = { ...details.requestHeaders, 'User-Agent': login ? GOOGLE_LOGIN_UA : UA }
+    callback({ requestHeaders: headers })
+  })
+  // catat sertifikat untuk Info Situs; -3 = pakai hasil verifikasi Chromium apa adanya
+  ses.setCertificateVerifyProc((req, cb) => {
+    const c = req.certificate
+    certs.set(profileId + '|' + req.hostname, {
+      subject: c.subject.commonName, subjectOrg: c.subject.organizations.join(', '),
+      issuer: c.issuer.commonName, issuerOrg: c.issuer.organizations.join(', '),
+      validStart: c.validStart, validExpiry: c.validExpiry, fingerprint: c.fingerprint, serial: c.serialNumber,
+      result: req.verificationResult, knownRoot: req.isIssuedByKnownRoot,
+    })
+    cb(-3)
+  })
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => { onPermissionRequest(profileId, permission, details).then(callback) })
+  ses.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
+    if (PERM_DENY.has(permission)) return false
+    const kinds = permKinds(permission, details.mediaType ? [details.mediaType] : [])
+    if (!kinds.length) return true
+    let origin
+    try { origin = new URL(requestingOrigin).origin } catch { return false }
+    return kinds.every(k => sitePermsOf(profileId, origin)[k] === 'allow')
+  })
+  if (blocker) {
+    // ponytail: Ghostery mendaftarkan handler IPC global per sesi -> sesi kedua error. Handler-nya sama, jadi daftar ulang saja.
+    ipcMain.removeHandler('@ghostery/adblocker/inject-cosmetic-filters')
+    ipcMain.removeHandler('@ghostery/adblocker/is-mutation-observer-enabled')
+    blocker.enableBlockingInSession(ses)
+  }
+  const findTab = wc => state.tabs.find(t => t.view?.webContents === wc)
+  const extensions = new ElectronChromeExtensions({
+    license: 'GPL-3.0',
+    session: ses,
+    createTab: async d => [newTab(d.url || engine().home, profileId, d.active !== false).view.webContents, win],
+    selectTab: wc => { const t = findTab(wc); if (t) selectTab(t) },
+    removeTab: wc => { const t = findTab(wc); if (t) closeTab(t) },
+    createWindow: async d => { newTab([].concat(d.url || engine().home)[0], profileId); return win },
+  })
+  ctx[profileId] = { ses, extensions }
+  // ponytail: web store selalu memuat semua ekstensi di folder -> yang dinonaktifkan langsung di-unload lagi.
+  ses.extensions.on('extension-loaded', (_, ext) => {
+    if (extPrefs(profileId).disabled[ext.id]) setImmediate(() => ses.extensions.removeExtension(ext.id))
+    render()
+  })
+  ses.extensions.on('extension-unloaded', render)
+  // Ekstensi tiap profil disimpan terpisah, seperti Chrome
+  // unduhan langsung ke folder Downloads (nama unik), progres ditampilkan di Library > Unduhan
+  ses.on('will-download', (_, item) => {
+    const file = uniquePath(app.getPath('downloads'), item.getFilename())
+    item.setSavePath(file)
+    const d = { id: uid('d'), filename: path.basename(file), path: file, url: item.getURL(), total: item.getTotalBytes(), received: 0, state: 'progressing', ts: Date.now(), p: profileId }
+    downloads.push(d)
+    liveDownloads.set(d.id, item)
+    win?.webContents.send('download-started', d.filename)
+    item.on('updated', (_, st) => { d.received = item.getReceivedBytes(); d.total = item.getTotalBytes(); d.state = st === 'interrupted' ? 'interrupted' : item.isPaused() ? 'paused' : 'progressing'; downloadsChanged() })
+    item.once('done', (_, st) => { d.received = item.getReceivedBytes(); d.state = st; liveDownloads.delete(d.id); downloadsChanged() })
+    downloadsChanged()
+  })
+  if (!profileOf(profileId)?.ephemeral) // privat: tanpa ekstensi (seperti incognito Chrome)
+    installChromeWebStore({ session: ses, extensionsPath: extDir(profileId) })
+      .catch(e => console.error('web store:', e))
+  return ctx[profileId]
+}
+
+const extDir = profileId => path.join(DATA, 'Extensions', profileId)
+const extPrefs = profileId => (state.extPrefs[profileId] ||= { unpinned: [], disabled: {} })
+
+// Nama ekstensi bisa berupa "__MSG_appName__" -> ambil dari _locales
+function extName(e) {
+  const m = /^__MSG_(\w+)__$/.exec(e.name)
+  if (!m) return e.name
+  try {
+    const msgs = JSON.parse(fs.readFileSync(path.join(e.path, '_locales', e.manifest.default_locale || 'en', 'messages.json'), 'utf8'))
+    const key = Object.keys(msgs).find(k => k.toLowerCase() === m[1].toLowerCase())
+    return msgs[key]?.message || e.name
+  } catch { return e.name }
+}
+
+function extList(profileId) {
+  const c = ctx[profileId]
+  if (!c) return []
+  const prefs = extPrefs(profileId)
+  const loaded = c.ses.extensions.getAllExtensions().filter(e => !prefs.disabled[e.id]).map(e => ({
+    id: e.id, name: extName(e), version: e.version, enabled: true,
+    pinned: !prefs.unpinned.includes(e.id),
+    options: !!(e.manifest.options_ui?.page || e.manifest.options_page),
+  }))
+  const off = Object.entries(prefs.disabled).map(([id, d]) => ({ id, name: d.name, version: d.version, enabled: false, pinned: false, options: false }))
+  return [...loaded, ...off].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function activeTab() {
+  return state.tabs
+    .filter(t => t.profileId === state.activeProfile && t.wsId === activeWs())
+    .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0]
+}
+
+function wake(t) {
+  if (!t.url) return // tab baru kosong: halaman Almac di UI, belum ada webContents
+  const { ses, extensions } = profileCtx(t.profileId)
+  t.view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, spellcheck: false } })
+  t.view.setBorderRadius(10)
+  const wc = t.view.webContents
+  extensions.addTab(wc, win)
+  wc.setWindowOpenHandler(({ url, disposition }) => {
+    if (disposition === 'new-window') return { action: 'allow' } // popup login (OAuth) butuh window.opener
+    const n = newTab(url, t.profileId, disposition !== 'background-tab')
+    if (disposition === 'background-tab') n.lastActive = (t.lastActive || Date.now()) - 1
+    return { action: 'deny' }
+  })
+  const sync = visit => { t.url = wc.getURL(); t.title = wc.getTitle(); addHistory(t, visit); render() }
+  // navigator.userAgent (JS) di halaman login sama dengan header (konsisten), situs lain Chrome
+  wc.on('did-start-navigation', ({ url, isMainFrame, isSameDocument }) => {
+    if (!isMainFrame || isSameDocument) return
+    const want = isGoogleLogin(url) ? GOOGLE_LOGIN_UA : UA
+    if (wc.getUserAgent() !== want) wc.setUserAgent(want)
+  })
+  wc.on('focus', () => { // klik di panel split lain -> panel itu jadi tab aktif (kolom alamat ikut)
+    if (t !== activeTab() && isShown(t)) { t.lastActive = Date.now(); profileCtx(t.profileId).extensions.selectTab(wc); render(true) }
+  })
+  wc.on('found-in-page', (_, r) => { if (t === activeTab()) win?.webContents.send('find-result', { active: r.activeMatchOrdinal, matches: r.matches }) })
+  // zoom per situs: terapkan zoom tersimpan setiap pindah halaman
+  wc.on('did-navigate', () => { const z = state.zoom[hostOf(wc.getURL())]; if (z && z !== 1) wc.setZoomFactor(z) })
+  wc.on('did-navigate', () => sync(true))
+  wc.on('did-navigate-in-page', (_, url, isMainFrame) => { if (isMainFrame) sync(true) })
+  wc.on('page-title-updated', () => sync(false))
+  wc.on('page-favicon-updated', (_, icons) => {
+    t.favicon = icons[0]
+    const host = hostOf(t.url)
+    if (host && icons[0] && state.favicons[host] !== icons[0]) {
+      delete state.favicons[host] // urutan sisip = urutan terbaru
+      state.favicons[host] = icons[0]
+      const hosts = Object.keys(state.favicons)
+      if (hosts.length > 3000) delete state.favicons[hosts[0]]
+    }
+    render()
+  })
+  wc.loadURL(t.url)
+}
+
+function sleep(t) {
+  if (!t.view) return
+  win?.contentView.removeChildView(t.view)
+  shownViews = shownViews.filter(v => v !== t.view)
+  t.view.webContents.close()
+  t.view = null
+}
+
+// tab yang tampil: tab aktif + pasangan split-nya (kiri/kanan sesuai urutan di daftar tab)
+function visibleTabs() {
+  const t = activeTab()
+  if (!t) return []
+  const partner = t.group && state.tabs.find(x => x !== t && x.group === t.group)
+  if (!partner) return [t]
+  return state.tabs.indexOf(t) < state.tabs.indexOf(partner) ? [t, partner] : [partner, t]
+}
+// posisi halaman di jendela: satu kotak, atau dua kotak dipisah GAP untuk split view
+function paneBounds(count, group) {
+  const [w, h] = win.getContentSize()
+  const x = sideSpace() + GAP, y = GAP + barSpace(), W = Math.max(w - x - GAP, 0), H = Math.max(h - y - GAP, 0)
+  if (count < 2) return [{ x, y, width: W, height: H }]
+  const lw = Math.round((W - GAP) * (state.splitRatio[group] ?? 0.5))
+  return [{ x, y, width: lw, height: H }, { x: x + lw + GAP, y, width: Math.max(W - lw - GAP, 0), height: H }]
+}
+let shownViews = []
+const isShown = t => !!t.view && shownViews.includes(t.view)
+function layout() {
+  if (!win) return
+  const tabs = modalOpen || peeking || covered ? [] : visibleTabs()
+  for (const t of tabs) if (!t.view) wake(t) // pasangan split ikut dihidupkan
+  const views = tabs.map(t => t.view).filter(Boolean)
+  for (const v of shownViews) if (!views.includes(v)) win.contentView.removeChildView(v)
+  shownViews = views
+  const bounds = paneBounds(views.length, tabs[0]?.group)
+  views.forEach((v, i) => { win.contentView.addChildView(v); v.setBounds(bounds[i]) })
+}
+
+function selectTab(t) {
+  if (findOpen && t !== activeTab()) commands.findClose()
+  t.lastActive = Date.now()
+  state.activeProfile = t.profileId
+  profileOf(t.profileId).activeWs = t.wsId
+  if (!t.view) wake(t)
+  layout()
+  if (t.view) profileCtx(t.profileId).extensions.selectTab(t.view.webContents)
+  render()
+}
+
+const newTabUrl = () => state.newTabPage === 'engine' ? engine().home : '' // '' = halaman Almac
+function newTab(url = newTabUrl(), profileId = state.activeProfile, focus = true) {
+  const t = { id: nextTabId++, profileId, wsId: activeWs(profileId), url, title: '', blocked: 0, lastActive: Date.now(), view: null }
+  state.tabs.push(t)
+  wake(t)
+  focus ? selectTab(t) : render()
+  return t
+}
+
+function unsplit(t) {
+  if (!t?.group) return
+  for (const x of state.tabs) if (x.group === t.group) delete x.group
+  delete state.splitRatio[t.group]
+}
+
+function closeTab(t) {
+  unsplit(t)
+  sleep(t)
+  state.tabs = state.tabs.filter(x => x !== t)
+  const next = activeTab()
+  next ? selectTab(next) : (layout(), render())
+}
+
+// buka url di tab aktif (tab kosong dihidupkan dulu), atau tab baru kalau tidak ada tab
+function goTo(url) {
+  const t = activeTab()
+  if (!t) return newTab(url)
+  if (t.view) return t.view.webContents.loadURL(url)
+  t.url = url
+  wake(t)
+  layout()
+  render()
+}
+
+function toUrl(input) {
+  input = input.trim()
+  if (/^[a-z]+:\/\//i.test(input) || input.startsWith('about:')) return input
+  if (/^[^\s]+\.[^\s]{2,}$/.test(input) || input.startsWith('localhost')) return 'https://' + input
+  return engine().search + encodeURIComponent(input)
+}
+
+const commands = {
+  navigate: input => goTo(toUrl(input)),
+  newTab: url => newTab(url ? toUrl(url) : undefined),
+  select: id => { const t = state.tabs.find(t => t.id === id); if (t) selectTab(t) },
+  close: id => { const t = state.tabs.find(t => t.id === id); if (t) closeTab(t) },
+  back: () => activeTab()?.view?.webContents.navigationHistory.goBack(),
+  forward: () => activeTab()?.view?.webContents.navigationHistory.goForward(),
+  reload: () => activeTab()?.view?.webContents.reload(),
+  switchProfile: id => {
+    state.activeProfile = id
+    const t = activeTab()
+    t ? selectTab(t) : newTab()
+  },
+  addProfile: ({ name, color }) => {
+    const p = { id: 'p' + Date.now().toString(36), name: name || 'Profil', color: color || '#ffcd75' }
+    workspaces(p)
+    state.profiles.push(p)
+    state.activeProfile = p.id
+    newTab('https://accounts.google.com/', p.id) // langsung login akun Google untuk profil ini
+  },
+  removeProfile: id => {
+    if (state.profiles.length < 2) return
+    state.tabs.filter(t => t.profileId === id).forEach(sleep)
+    state.tabs = state.tabs.filter(t => t.profileId !== id)
+    state.profiles = state.profiles.filter(p => p.id !== id)
+    delete state.extPrefs[id]
+    history = history.filter(h => h.p !== id)
+    saveHistory()
+    bookmarks = bookmarks.filter(b => b.p !== id)
+    saveBookmarks()
+    delete state.sitePerms[id]
+    session.fromPartition('persist:' + id).clearData()
+    commands.switchProfile(state.profiles[0].id)
+  },
+  ready: render, // UI baru dimuat/reload -> kirim state
+  openPrivate: () => {
+    let p = state.profiles.find(p => p.ephemeral)
+    if (!p) { p = { id: uid('private'), name: 'Privat', color: '#8b5cf6', icon: 'eye-off', ephemeral: true }; workspaces(p); state.profiles.push(p) }
+    state.activeProfile = p.id
+    newTab()
+  },
+  closePrivate: () => {
+    const p = state.profiles.find(p => p.ephemeral)
+    if (!p) return
+    state.tabs.filter(t => t.profileId === p.id).forEach(t => { unsplit(t); sleep(t) })
+    state.tabs = state.tabs.filter(t => t.profileId !== p.id)
+    ctx[p.id]?.ses.clearStorageData() // sesi memori dikosongkan
+    delete ctx[p.id]
+    downloads = downloads.filter(d => d.p !== p.id)
+    state.profiles = state.profiles.filter(x => x !== p)
+    commands.switchProfile(state.profiles[0].id)
+  },
+  setting: ({ key, value }) => {
+    if (key === 'searchEngine' && ENGINES[value]) state.searchEngine = value
+    if (key === 'newTabPage' && ['almac', 'engine'].includes(value)) state.newTabPage = value
+    if (key === 'bookmarkBar') { state.bookmarkBar = !!value; layout() }
+    if (key === 'sleepAfter' && [0, 5, 10, 30].includes(value)) state.sleepAfter = value
+    if (key === 'dnsMode' && ['auto', 'doh', 'off'].includes(value)) {
+      state.dnsMode = value
+      // Terapkan DNS-over-HTTPS ke semua sesi aktif
+      const dohUrl = value === 'doh' && state.customDns ? state.customDns : value === 'off' ? '' : null
+      for (const [pid, c] of Object.entries(ctx)) {
+        if (dohUrl !== null) c.ses.setSSLConfig?.({ enableDNSOverHTTPS: !!dohUrl, dnsOverHTTPSURL: dohUrl || undefined })
+      }
+    }
+    if (key === 'customDns') {
+      state.customDns = (value || '').trim()
+      if (state.dnsMode === 'doh') {
+        for (const [pid, c] of Object.entries(ctx)) {
+          c.ses.setSSLConfig?.({ enableDNSOverHTTPS: !!state.customDns, dnsOverHTTPSURL: state.customDns || undefined })
+        }
+      }
+    }
+    if (key === 'blockJavaScript') {
+      state.blockJavaScript = !!value
+      // JavaScript: terapkan ke sesi aktif (berlaku untuk tab baru)
+      for (const [pid, c] of Object.entries(ctx)) {
+        c.ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, cb) => cb({ cancel: false }))
+      }
+    }
+    if (key === 'cookiePolicy' && ['allow', 'block_third_party', 'block_all'].includes(value)) state.cookiePolicy = value
+    if (key === 'doNotTrack') state.doNotTrack = !!value
+    render(true)
+  },
+  profileUpdate: ({ id, name, color, icon }) => {
+    const p = profileOf(id)
+    if (!p) return
+    if (name?.trim()) p.name = name.trim().slice(0, 24)
+    if (/^#[0-9a-f]{6}$/i.test(color || '')) p.color = color
+    p.icon = icon || ''
+    render(true)
+  },
+
+  // ---- info situs ----
+  permAnswer: ({ id, allow, remember }) => {
+    const p = pendingPerms.get(id)
+    if (!p) return
+    pendingPerms.delete(id)
+    if (remember) for (const k of p.kinds) ((state.sitePerms[p.profileId] ||= {})[p.origin] ||= {})[k] = allow ? 'allow' : 'block'
+    render()
+    p.resolve(allow)
+  },
+  sitePerm: ({ origin, kind, value }) => {
+    const perms = ((state.sitePerms[state.activeProfile] ||= {})[origin] ||= {})
+    if (value === 'ask') delete perms[kind]; else perms[kind] = value
+    render()
+  },
+  siteClearData: async origin => {
+    const { ses } = profileCtx(state.activeProfile)
+    const host = new URL(origin).hostname
+    const domain = getDomain(host) || host // hapus untuk seluruh domain, mis. mail.google.com -> google.com
+    const cookies = await ses.cookies.get({ domain })
+    await Promise.all(cookies.map(c => ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})))
+    await ses.clearStorageData({ origin, storages: SITE_STORAGES })
+    activeTab()?.view?.webContents.reload()
+  },
+
+  clearCache: async () => {
+    const { ses } = profileCtx(state.activeProfile)
+    await ses.clearCache()
+  },
+  clearCookies: async () => {
+    const { ses } = profileCtx(state.activeProfile)
+    await ses.clearStorageData({ storages: SITE_STORAGES })
+    const cookies = await ses.cookies.get({})
+    await Promise.all(cookies.map(c => ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})))
+    // tutup semua tab dan buka tab baru
+    const profileId = state.activeProfile
+    state.tabs.filter(t => t.profileId === profileId && t.view).forEach(t => { t.view.webContents.reload() })
+  },
+  clearAll: async () => {
+    const profileId = state.activeProfile
+    const { ses } = profileCtx(profileId)
+    await ses.clearCache()
+    await ses.clearStorageData({ storages: SITE_STORAGES })
+    const cookies = await ses.cookies.get({})
+    await Promise.all(cookies.map(c => ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})))
+    history = history.filter(h => h.p !== profileId)
+    saveHistory()
+    state.tabs.filter(t => t.profileId === profileId && t.view).forEach(t => { t.view.webContents.reload() })
+    render(true)
+  },
+
+  // ---- workspace ----
+  wsSwitch: id => {
+    profileOf(state.activeProfile).activeWs = id
+    const t = activeTab()
+    t ? selectTab(t) : layout() // workspace kosong -> tampilkan layar kosong
+    render(true) // tanpa debounce supaya animasi geser terasa langsung
+  },
+  wsStep: dir => {
+    const list = profileOf(state.activeProfile).workspaces
+    const i = list.findIndex(w => w.id === activeWs())
+    const next = list[i + dir]
+    if (next) commands.wsSwitch(next.id)
+  },
+  wsAdd: ({ name, icon, color } = {}) => {
+    const p = profileOf(state.activeProfile)
+    const w = { id: uid('w'), name: name || 'Workspace ' + (p.workspaces.length + 1), icon, color }
+    p.workspaces.push(w)
+    commands.wsSwitch(w.id)
+  },
+  wsUpdate: ({ id, name, icon, color }) => {
+    const w = profileOf(state.activeProfile).workspaces.find(w => w.id === id)
+    if (!w) return
+    Object.assign(w, { name: name || w.name, icon, color })
+    render(true)
+  },
+  wsMove: ({ id, dir }) => {
+    const list = profileOf(state.activeProfile).workspaces
+    const i = list.findIndex(w => w.id === id), j = i + dir
+    if (i < 0 || j < 0 || j >= list.length) return
+    ;[list[i], list[j]] = [list[j], list[i]]
+    render(true)
+  },
+  wsCloseTabs: id => {
+    const p = profileOf(state.activeProfile)
+    state.tabs.filter(t => t.profileId === p.id && t.wsId === id).forEach(sleep)
+    state.tabs = state.tabs.filter(t => !(t.profileId === p.id && t.wsId === id))
+    layout()
+    render(true)
+  },
+  wsRemove: id => {
+    const p = profileOf(state.activeProfile)
+    if (p.workspaces.length < 2) return
+    state.tabs.filter(t => t.profileId === p.id && t.wsId === id).forEach(sleep)
+    state.tabs = state.tabs.filter(t => !(t.profileId === p.id && t.wsId === id))
+    p.workspaces = p.workspaces.filter(w => w.id !== id)
+    commands.wsSwitch(p.workspaces[0].id)
+  },
+  tabMove: ({ id, wsId }) => {
+    const t = state.tabs.find(t => t.id === id)
+    if (!t) return
+    const wasActive = t === activeTab()
+    unsplit(t)
+    t.wsId = wsId
+    const next = wasActive && activeTab()
+    if (next) selectTab(next); else if (wasActive) layout()
+    render(true)
+  },
+  // ---- cari di halaman ----
+  findOpen: () => { findOpen = true; layout(); render(true) },
+  find: ({ text, forward = true, next = false }) => {
+    const wc = activeTab()?.view?.webContents
+    if (!wc) return
+    if (!text) { wc.stopFindInPage('clearSelection'); win?.webContents.send('find-result', { active: 0, matches: 0 }); return }
+    wc.findInPage(text, { forward, findNext: !next })
+  },
+  findClose: () => {
+    activeTab()?.view?.webContents.stopFindInPage('clearSelection')
+    findOpen = false
+    layout(); render(true)
+  },
+
+  // ---- zoom per situs ----
+  zoom: dir => {
+    const t = activeTab(), wc = t?.view?.webContents
+    const host = hostOf(t?.url)
+    if (!wc || !host) return
+    const cur = wc.getZoomFactor()
+    const i = ZOOM_STEPS.findIndex(z => z >= cur - 0.001)
+    const next = dir === 0 ? 1 : ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, (i < 0 ? 5 : i) + dir))]
+    wc.setZoomFactor(next)
+    if (next === 1) delete state.zoom[host]; else state.zoom[host] = next
+    render(true)
+  },
+
+  // ---- unduhan ----
+  dlOpen: id => { const d = downloads.find(d => d.id === id); if (d) shell.openPath(d.path) },
+  dlShow: id => { const d = downloads.find(d => d.id === id); if (d) shell.showItemInFolder(d.path) },
+  dlPause: id => liveDownloads.get(id)?.pause(),
+  dlResume: id => { const item = liveDownloads.get(id); if (item?.canResume()) item.resume() },
+  dlCancel: id => liveDownloads.get(id)?.cancel(),
+  dlRemove: id => { liveDownloads.get(id)?.cancel(); downloads = downloads.filter(d => d.id !== id); downloadsChanged() },
+  dlClear: () => { downloads = downloads.filter(d => d.state === 'progressing' || d.state === 'paused'); downloadsChanged() },
+
+  // ---- split view ----
+  splitWith: ({ id, other }) => {
+    const a = state.tabs.find(t => t.id === id), b = state.tabs.find(t => t.id === other)
+    if (!a || !b || a === b) return
+    unsplit(a); unsplit(b)
+    if (!b.url) b.url = engine().home // tab kosong tidak punya halaman untuk ditampilkan
+    if (!a.url) a.url = engine().home
+    const g = uid('g')
+    a.group = b.group = g
+    state.splitRatio[g] = 0.5
+    state.tabs.splice(state.tabs.indexOf(b), 1)
+    state.tabs.splice(state.tabs.indexOf(a) + 1, 0, b) // pasangan di sebelah kanan
+    selectTab(a)
+  },
+  splitNew: id => {
+    const b = newTab(engine().home, undefined, false)
+    commands.splitWith({ id, other: b.id })
+  },
+  unsplit: id => { unsplit(state.tabs.find(t => t.id === id)); layout(); render(true) },
+  splitRatio: ratio => {
+    const g = activeTab()?.group
+    if (!g) return
+    state.splitRatio[g] = Math.min(0.8, Math.max(0.2, +ratio || 0.5))
+    layout(); render()
+  },
+
+  sleepTab: id => { const t = state.tabs.find(t => t.id === id); if (t && !isShown(t)) { sleep(t); render() } },
+  sleepOthers: id => { for (const t of state.tabs) if (t.id !== id && t.view && !isShown(t) && !t.view.webContents.isCurrentlyAudible()) sleep(t); render() },
+  copyUrl: id => clipboard.writeText(state.tabs.find(t => t.id === id)?.url || ''),
+  modalClose: () => { modalOpen = false; layout() },
+  sidebarToggle: () => {
+    state.sidebar.mode = state.sidebar.mode === 'pinned' ? 'hidden' : 'pinned'
+    peeking = false
+    win?.setWindowButtonVisibility?.(state.sidebar.mode === 'pinned')
+    layout()
+    render(true)
+  },
+  sidebarWidth: w => {
+    state.sidebar.width = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, +w || SIDEBAR)))
+    layout()
+    render()
+  },
+
+  // ---- history ----
+  open: url => newTab(url),
+  bookmarkAddCurrent: () => { // ⌘D / bintang: tambah (kalau belum) lalu UI membuka modal edit
+    const t = activeTab()
+    if (!t?.url || profileOf(t.profileId)?.ephemeral) return null // privat: tidak menyimpan bookmark
+    let b = bookmarks.find(b => b.p === t.profileId && !b.folder && b.url === t.url)
+    if (b) return { ...b, added: false }
+    b = { id: uid('b'), url: t.url, title: t.title || t.url, path: [], order: nextOrder(), ts: Date.now(), p: t.profileId }
+    bookmarks.push(b); saveBookmarks(); render(true)
+    return { ...b, added: true }
+  },
+  bookmarkSave: ({ id, title, url, path }) => {
+    const b = bookmarks.find(b => b.id === id)
+    if (!b) return
+    if (title?.trim()) b.title = title.trim()
+    if (!b.folder && url?.trim()) b.url = /^[a-z]+:/i.test(url.trim()) ? url.trim() : 'https://' + url.trim()
+    if (Array.isArray(path) && !samePath(b.path, path)) { b.path = path; b.order = nextOrder() } // pindah folder -> taruh di akhir
+    saveBookmarks(); render(true)
+  },
+  folderAdd: ({ path = [], title }) => {
+    title = (title || '').trim() || 'Folder baru'
+    bookmarks.push({ id: uid('f'), folder: true, title, path, order: nextOrder(), p: state.activeProfile })
+    saveBookmarks(); render(true)
+  },
+  folderRename: ({ path, title, newTitle }) => {
+    newTitle = (newTitle || '').trim()
+    if (!newTitle || newTitle === title) return
+    const p = state.activeProfile, full = [...path, title]
+    for (const b of bookmarks) {
+      if (b.p !== p) continue
+      if (b.folder && b.title === title && samePath(b.path, path)) b.title = newTitle
+      else if (startsWith(b.path, full)) b.path = [...path, newTitle, ...b.path.slice(full.length)]
+    }
+    // folder yang hanya tersirat (dari path) dibuat jadi entri supaya namanya tersimpan
+    if (!bookmarks.some(b => b.p === p && b.folder && b.title === newTitle && samePath(b.path, path)))
+      bookmarks.push({ id: uid('f'), folder: true, title: newTitle, path, order: nextOrder(), p })
+    saveBookmarks(); render(true)
+  },
+  folderRemove: ({ path, title }) => { // folder + seluruh isinya
+    const p = state.activeProfile, full = [...path, title]
+    bookmarks = bookmarks.filter(b => b.p !== p || !((b.folder && b.title === title && samePath(b.path, path)) || startsWith(b.path, full)))
+    saveBookmarks(); render(true)
+  },
+  bookmarkBarToggle: () => { state.bookmarkBar = !state.bookmarkBar; layout(); render(true) },
+  openHere: url => goTo(url),
+  bookmarkRemove: id => { bookmarks = bookmarks.filter(b => b.id !== id); saveBookmarks(); render(true) },
+  historyRemove: url => { history = history.filter(h => !(h.url === url && h.p === state.activeProfile)); saveHistory() },
+  historyClear: () => { history = history.filter(h => h.p !== state.activeProfile); saveHistory() },
+  webStore: () => newTab('https://chromewebstore.google.com/'),
+  // iCloud Keychain tidak bisa diakses browser non-resmi -> salin domain & buka app Passwords untuk dicari
+  passwords: () => {
+    try { clipboard.writeText(new URL(activeTab()?.url).hostname.replace(/^www\./, '')) } catch {}
+    shell.openPath('/System/Applications/Passwords.app')
+  },
+  extPin: id => {
+    const prefs = extPrefs(state.activeProfile)
+    prefs.unpinned = prefs.unpinned.includes(id) ? prefs.unpinned.filter(x => x !== id) : [...prefs.unpinned, id]
+    render()
+  },
+  extToggle: id => {
+    const { ses } = profileCtx(state.activeProfile)
+    const prefs = extPrefs(state.activeProfile)
+    const off = prefs.disabled[id]
+    if (off) {
+      delete prefs.disabled[id]
+      ses.extensions.loadExtension(off.path).catch(e => console.error('gagal memuat ekstensi:', e.message))
+    } else {
+      const e = ses.extensions.getExtension(id)
+      if (!e) return
+      prefs.disabled[id] = { name: extName(e), version: e.version, path: e.path }
+      ses.extensions.removeExtension(id)
+    }
+    render()
+  },
+  extOptions: id => {
+    const e = profileCtx(state.activeProfile).ses.extensions.getExtension(id)
+    const page = e?.manifest.options_ui?.page || e?.manifest.options_page
+    if (page) newTab(`chrome-extension://${id}/${page}`)
+  },
+  extRemove: async id => {
+    const profileId = state.activeProfile
+    const prefs = extPrefs(profileId)
+    delete prefs.disabled[id]
+    prefs.unpinned = prefs.unpinned.filter(x => x !== id)
+    await uninstallExtension(id, { session: profileCtx(profileId).ses, extensionsPath: extDir(profileId) })
+    render()
+  },
+  theme: () => {
+    const order = ['system', 'light', 'dark']
+    state.theme = order[(order.indexOf(state.theme) + 1) % order.length]
+    nativeTheme.themeSource = state.theme // UI & halaman web ikut prefers-color-scheme
+    render()
+  },
+}
+
+ipcMain.on('cmd', (_, type, arg) => commands[type]?.(arg))
+
+const matches = (h, q) => (h.title + ' ' + h.url).toLowerCase().includes(q)
+const queries = {
+  history: (q = '') => {
+    q = q.trim().toLowerCase()
+    return history.filter(h => h.p === state.activeProfile && (!q || matches(h, q)))
+      .sort((a, b) => b.ts - a.ts).slice(0, 300)
+  },
+  bookmarks: (q = '') => {
+    q = q.trim().toLowerCase()
+    return bookmarks.filter(b => b.p === state.activeProfile && (!q || (b.title + ' ' + b.url + ' ' + b.path.join(' ')).toLowerCase().includes(q)))
+      .sort((a, b) => a.order - b.order).slice(0, 5000)
+      .map(b => ({ ...b, icon: state.favicons[hostOf(b.url)] }))
+  },
+  importSources,
+  importRun,
+  bookmarkCurrent: () => commands.bookmarkAddCurrent(),
+  downloads: () => downloads.filter(d => d.p === state.activeProfile).slice().reverse(),
+  suggest: async q => {
+    q = q.trim()
+    if (!q) return { bookmarks: [], history: [], search: [] }
+    const lq = q.toLowerCase()
+    const marks = bookmarks.filter(b => b.p === state.activeProfile && !b.folder && matches(b, lq)).slice(0, 3)
+    const hist = history.filter(h => h.p === state.activeProfile && matches(h, lq) && !marks.some(b => b.url === h.url))
+      .sort((a, b) => b.n - a.n || b.ts - a.ts).slice(0, 4)
+    let search = []
+    try {
+      // saran dari mesin pencari yang dipilih (format OpenSearch: [query, [saran...]])
+      if (!engine().suggest) throw new Error('tanpa saran')
+      const res = await fetch(engine().suggest + encodeURIComponent(q), { signal: AbortSignal.timeout(1500) })
+      search = (await res.json())[1].filter(s => s.toLowerCase() !== lq).slice(0, 5)
+    } catch {}
+    return { bookmarks: marks.map(({ url, title }) => ({ url, title })), history: hist.map(({ url, title }) => ({ url, title })), search }
+  },
+}
+// modal pixel: sembunyikan halaman web (native view selalu di atas UI) dan kirim snapshot-nya untuk latar blur
+// screenshot halaman yang tampil (1-2 panel) + posisinya, untuk ditaruh UI saat halaman disembunyikan
+async function snapshot() {
+  const shots = await Promise.all(shownViews.map(async v => {
+    const img = await v.webContents.capturePage().catch(() => null)
+    if (!img || img.isEmpty()) return null
+    return { src: 'data:image/jpeg;base64,' + img.resize({ width: Math.min(1400, v.getBounds().width * 2) }).toJPEG(75).toString('base64'), ...v.getBounds() }
+  }))
+  return shots.filter(Boolean)
+}
+// dropdown bookmark bar: halaman diganti snapshot (tanpa blur) supaya menu bisa tampil di atasnya
+queries.cover = async on => {
+  if (on && !covered) { const snap = await snapshot(); covered = true; layout(); return snap }
+  if (!on && covered) { covered = false; layout() }
+  return null
+}
+queries.modalOpen = async () => {
+  const snap = await snapshot()
+  modalOpen = true
+  layout()
+  return snap
+}
+// sidebar tersembunyi muncul di atas halaman: native view diganti snapshot selama sidebar terbuka
+queries.peek = async on => {
+  if (on && !peeking) {
+    const snap = await snapshot()
+    peeking = true
+    layout()
+    win?.setWindowButtonVisibility?.(true)
+    return snap
+  }
+  if (!on && peeking) {
+    peeking = false
+    layout()
+    win?.setWindowButtonVisibility?.(state.sidebar.mode === 'pinned')
+  }
+  return null
+}
+queries.siteInfo = async () => {
+  const t = activeTab()
+  let u
+  try { u = new URL(t.url) } catch { return null }
+  const web = u.protocol === 'https:' || u.protocol === 'http:'
+  const domain = web ? getDomain(u.hostname) || u.hostname : ''
+  const cookies = web ? await profileCtx(t.profileId).ses.cookies.get({ domain }) : []
+  return {
+    url: t.url, origin: u.origin, host: u.hostname, domain, protocol: u.protocol, favicon: t.favicon,
+    cert: certs.get(t.profileId + '|' + u.hostname) || null,
+    cookies: cookies.length, blocked: t.blocked, perms: sitePermsOf(t.profileId, u.origin),
+  }
+}
+ipcMain.handle('ask', (_, type, arg) => queries[type]?.(arg))
+
+function buildMenu() {
+  const send = ch => () => { win.webContents.focus(); win.webContents.send(ch) }
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: 'Almac Browser',
+      submenu: [
+        { role: 'about' }, { type: 'separator' },
+        { label: 'Pengaturan…', accelerator: 'CmdOrCtrl+,', click: send('open-settings') },
+        { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' },
+      ],
+    },
+    {
+      label: 'Tab',
+      submenu: [
+        { label: 'Tab Baru', accelerator: 'CmdOrCtrl+T', click: () => { commands.newTab(); send('focus-url')() } },
+        { label: 'Tutup Tab', accelerator: 'CmdOrCtrl+W', click: () => { const t = activeTab(); if (t) closeTab(t) } },
+        { label: 'Tab Privat Baru', accelerator: 'CmdOrCtrl+Shift+N', click: () => commands.openPrivate() },
+        { label: 'Fokus Alamat', accelerator: 'CmdOrCtrl+L', click: send('focus-url') },
+        { label: 'Cari di Halaman', accelerator: 'CmdOrCtrl+F', click: () => { commands.findOpen(); send('open-find')() } },
+        { label: 'Hasil Berikutnya', accelerator: 'CmdOrCtrl+G', click: send('find-next') },
+        { label: 'Hasil Sebelumnya', accelerator: 'CmdOrCtrl+Shift+G', click: send('find-prev') },
+        { type: 'separator' },
+        { label: 'Perbesar', accelerator: 'CmdOrCtrl+=', click: () => commands.zoom(1) },
+        { label: 'Perbesar', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => commands.zoom(1) },
+        { label: 'Perkecil', accelerator: 'CmdOrCtrl+-', click: () => commands.zoom(-1) },
+        { label: 'Ukuran Asli', accelerator: 'CmdOrCtrl+0', click: () => commands.zoom(0) },
+        { label: 'Unduhan', accelerator: 'CmdOrCtrl+Shift+J', click: send('toggle-downloads') },
+        { type: 'separator' },
+        { label: 'Muat Ulang', accelerator: 'CmdOrCtrl+R', click: commands.reload },
+        { label: 'Kembali', accelerator: 'CmdOrCtrl+[', click: commands.back },
+        { label: 'Maju', accelerator: 'CmdOrCtrl+]', click: commands.forward },
+        { label: 'History', accelerator: 'CmdOrCtrl+Y', click: send('toggle-history') },
+        { label: 'Bookmark Halaman Ini', accelerator: 'CmdOrCtrl+D', click: send('bookmark-current') },
+        { label: 'Bookmark', accelerator: 'CmdOrCtrl+Alt+B', click: send('toggle-bookmarks') },
+        { label: 'Tampilkan/Sembunyikan Bookmark Bar', accelerator: 'CmdOrCtrl+Shift+B', click: () => commands.bookmarkBarToggle() },
+        { label: 'Import dari Chrome/Brave…', click: send('open-import') },
+        { label: 'Tampilkan/Sembunyikan Sidebar', accelerator: 'CmdOrCtrl+S', click: () => commands.sidebarToggle() },
+        { type: 'separator' },
+        { label: 'Workspace Berikutnya', accelerator: 'CmdOrCtrl+Alt+Right', click: () => commands.wsStep(1) },
+        { label: 'Workspace Sebelumnya', accelerator: 'CmdOrCtrl+Alt+Left', click: () => commands.wsStep(-1) },
+        { type: 'separator' },
+        { label: 'Cari Password (Keychain)', accelerator: 'CmdOrCtrl+Shift+P', click: () => commands.passwords() },
+        { label: 'DevTools Halaman', accelerator: 'CmdOrCtrl+Alt+I', click: () => activeTab()?.view?.webContents.toggleDevTools() },
+      ],
+    },
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ]))
+}
+
+app.whenReady().then(async () => {
+  load()
+  nativeTheme.themeSource = state.theme
+  try {
+    // Daftar filter yang sama dipakai Ghostery/uBlock (EasyList, EasyPrivacy, dll), di-cache ke disk
+    blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, {
+      path: path.join(DATA, 'adblock.bin'),
+      read: fs.promises.readFile,
+      write: fs.promises.writeFile,
+    })
+    // ponytail: scriptlet json-edit-xhr-request yang menandai request player YouTube dengan "#reloadxhr" membuat video
+    // berikutnya (klik video dari dalam YouTube) macet buffering + "Mengalami gangguan?" (player mengulang request terus).
+    // Terbukti lewat bisect (tanpa scriptlet ini 4/4 normal, dengan scriptlet ini 4/4 macet). Lewati scriptlet itu saja --
+    // dicek di argumennya, karena kode implementasinya sama di semua scriptlet. Hapus kalau filter list sudah diperbaiki.
+    const skipScriptlet = js => /reloadxhr/.test(decodeURIComponent(js.slice(js.lastIndexOf('(...['))))
+    // Perbaikan bug Ghostery yang merusak player YouTube:
+    // 1. scriptlet iframe disuntik ke main frame -> arahkan ke frame pengirimnya
+    // 2. scriptlet tidak dibungkus -> `class JSONPath`/`safeSelf` saling bentrok di global. Bungkus per script.
+    const inject = blocker.onInjectCosmeticFilters
+    blocker.onInjectCosmeticFilters = (e, url, msg) => inject({
+      frameId: e.frameId,
+      processId: e.processId,
+      sender: {
+        insertCSS: (css, opts) => e.sender.insertCSS(css, opts),
+        executeJavaScript: (js, gesture) => skipScriptlet(js) ? null : e.senderFrame?.executeJavaScript(`(function(){${js}\n})()`, gesture).catch(() => {}),
+      },
+    }, url, msg)
+    blocker.on('request-blocked', req => {
+      const t = state.tabs.find(t => t.view?.webContents.id === req.tabId)
+      if (t) { t.blocked++; render() }
+    })
+  } catch (e) {
+    console.error('adblock gagal dimuat (offline?):', e.message)
+  }
+
+  app.dock?.setIcon(path.join(__dirname, 'build', 'icon.png')) // ikon pixel Almac di Dock (mode dev)
+  ElectronChromeExtensions.handleCRXProtocol(session.defaultSession) // ikon ekstensi di sidebar
+  profileCtx(state.activeProfile) // daftarkan handler ekstensi sebelum UI dimuat
+  win = new BrowserWindow({
+    width: 1280, height: 820, minWidth: SIDEBAR_MIN + PAGE_MIN + GAP * 2, minHeight: 400,
+    title: 'Almac Browser',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#141623' : '#7eebd3',
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 16, y: 13 }, // titik tengah ~19.5px = tengah header sidebar (39px)
+    icon: path.join(__dirname, 'build', 'icon.png'), // Windows/Linux
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: false, contextIsolation: true },
+  })
+  win.on('resize', () => { layout(); render() }) // lebar sidebar efektif bisa berubah
+  win.setWindowButtonVisibility?.(state.sidebar.mode === 'pinned') // tombol jendela macOS ikut sidebar
+  win.on('closed', () => { win = null; clearTimeout(renderTimer) })
+  // geser 3 jari (macOS: Trackpad > More Gestures > Swipe between pages = 3 jari) di atas panel tab -> ganti workspace
+  win.on('swipe', (_, dir) => {
+    if (dir !== 'left' && dir !== 'right') return
+    const cursorX = screen.getCursorScreenPoint().x - win.getContentBounds().x
+    if (cursorX < sideSpace() + GAP || peeking) commands.wsStep(dir === 'left' ? 1 : -1) // hanya saat kursor di sidebar
+  })
+  buildMenu()
+  await win.loadFile(path.join(__dirname, 'ui', 'index.html'))
+  commands.switchProfile(state.activeProfile)
+
+  setInterval(() => {
+    if (!win) return
+    const now = Date.now()
+    for (const t of state.tabs) {
+      // hemat memori: tab tidak aktif (tidak tampil, tidak bersuara) ditidurkan setelah state.sleepAfter menit
+      if (state.sleepAfter && t.view && !isShown(t) && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !t.view.webContents.isCurrentlyAudible()) sleep(t)
+    }
+    render()
+  }, 60 * 1000)
+})
+
+app.on('window-all-closed', () => app.quit())
+// simpan history yang belum ditulis (debounce 2 detik) sebelum keluar
+app.on('before-quit', () => {
+  clearTimeout(historyTimer); fs.writeFileSync(HISTORY_FILE, JSON.stringify(history))
+  clearTimeout(bookmarkTimer); fs.writeFileSync(BOOKMARKS_FILE, JSON.stringify(bookmarks))
+  const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
+  fs.writeFileSync(DOWNLOADS_FILE, JSON.stringify(downloads.slice(-200).filter(d => !priv.has(d.p))))
+})
