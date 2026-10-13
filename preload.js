@@ -28,6 +28,5 @@ contextBridge.exposeInMainWorld('almac', {
   onPwUnlock: fn => ipcRenderer.on('pw-unlock', fn),
   onToast: fn => ipcRenderer.on('toast', (_, text) => fn(text)),
   onTabCrashed: fn => ipcRenderer.on('tab-crashed', (_, r) => fn(r)),
-  onHttpsFailed: fn => ipcRenderer.on('https-failed', (_, r) => fn(r)),
   ask: (type, arg) => ipcRenderer.invoke('ask', type, arg),
 })

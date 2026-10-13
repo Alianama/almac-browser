@@ -79,6 +79,20 @@ const certs = new Map() // "profileId|hostname" -> sertifikat terakhir yang dive
 const closedTabs = [] // tab yang baru ditutup (⌘⇧T), maks 20, hanya selama sesi
 const httpAllowed = new Set() // host yang boleh http setelah user setuju (HTTPS-Only), hanya selama sesi
 const upgraded = new Set() // url https hasil upgrade otomatis -> kalau gagal dimuat, tawarkan versi http
+const certAllowed = new Map() // host -> fingerprint sertifikat tidak valid yang user izinkan ("Proceed anyway"), hanya selama sesi
+// Electron tidak punya halaman error: halaman gagal = layar putih. Almac menampilkan halaman error sendiri (UI) & menyembunyikan view-nya.
+const CERT_TEXT = {
+  'net::ERR_CERT_AUTHORITY_INVALID': 'The certificate is not issued by a trusted authority (self-signed or company certificate).',
+  'net::ERR_CERT_DATE_INVALID': 'The certificate has expired or is not valid yet.',
+  'net::ERR_CERT_COMMON_NAME_INVALID': 'The certificate belongs to a different site name.',
+  'net::ERR_CERT_REVOKED': 'The certificate has been revoked.',
+}
+function setLoadError(t, err) {
+  clearTimeout(t.httpsTimer)
+  t.loadError = err
+  if (t === activeTab() || isShown(t)) layout()
+  render(true)
+}
 let privSeen = 0 // terakhir kali profil privat aktif (hapus otomatis)
 const focusOn = () => state.focus.until > Date.now()
 const dayKey = (d = new Date()) => d.toISOString().slice(0, 10)
@@ -405,7 +419,8 @@ function flush() {
       id: t.id, title: t.title || t.url || 'New tab', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
       pinned: !!t.pinned, atPin: !t.pinned || t.url === t.pinUrl,
     })),
-    url: active?.url || '',
+    url: active?.url || active?.loadError?.url || '',
+    loadError: active?.loadError || null,
     security: security(active),
     bookmarked: !!active && isBookmarked(active.profileId, active.url),
     blocked: active?.blocked || 0,
@@ -635,12 +650,31 @@ function wake(t) {
     win?.webContents.send('tab-crashed', { id: t.id, title: t.title || t.url, reason: d.reason })
   })
   // HTTPS-Only: versi https gagal -> tawarkan buka versi http (tidak aman)
+  // halaman gagal dimuat -> halaman error Almac (bukan layar putih)
   wc.on('did-fail-load', (_, code, desc, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return // -3 = dibatalkan (pindah halaman, tombol stop)
     const https = url.replace(/^http:/, 'https:') // juga kasus https -> redirect balik ke http (loop)
-    if (!isMainFrame || code === -3 || !upgraded.has(https)) return // -3 = dibatalkan
-    upgraded.delete(https)
-    win?.webContents.send('https-failed', { id: t.id, url: url.replace(/^https:/, 'http:'), host: hostOf(url), error: desc })
+    if (upgraded.has(https)) { // HTTPS-Only: versi https gagal -> tawarkan http
+      upgraded.delete(https)
+      return setLoadError(t, { kind: 'https', code: desc, url: url.replace(/^https:/, 'http:'), host: hostOf(url) })
+    }
+    const cert = t.certError?.url === url && t.certError
+    if (cert || (code <= -200 && code > -300)) return setLoadError(t, { kind: 'cert', code: desc, url, host: hostOf(url), text: CERT_TEXT[desc] || 'The site\'s security certificate is not valid.', issuer: cert?.issuer || '' })
+    setLoadError(t, { kind: 'net', code: desc, url, host: hostOf(url), dns: code === -105 && state.dnsMode === 'doh' })
   })
+  wc.on('did-start-navigation', ({ url, isMainFrame, isSameDocument }) => {
+    if (!isMainFrame || isSameDocument) return
+    if (t.loadError) { t.loadError = null; layout(); render() }
+    clearTimeout(t.httpsTimer)
+    // HTTPS-First: versi https tidak menjawab dalam 5 detik -> hentikan & tawarkan http (Chrome: 3 detik)
+    if (upgraded.has(url)) t.httpsTimer = setTimeout(() => {
+      if (!upgraded.has(url) || wc.isDestroyed() || !wc.isLoading()) return
+      upgraded.delete(url)
+      wc.stop()
+      setLoadError(t, { kind: 'https', code: 'no response over HTTPS', url: url.replace(/^https:/, 'http:'), host: hostOf(url) })
+    }, 5000)
+  })
+  wc.on('did-navigate', (_, url) => { clearTimeout(t.httpsTimer); upgraded.delete(url) })
   wc.on('found-in-page', (_, r) => { if (t === activeTab()) win?.webContents.send('find-result', { active: r.activeMatchOrdinal, matches: r.matches }) })
   // zoom per situs: terapkan zoom tersimpan setiap pindah halaman
   wc.on('did-navigate', () => { const z = state.zoom[hostOf(wc.getURL())]; if (z && z !== 1) wc.setZoomFactor(z) })
@@ -689,7 +723,7 @@ let shownViews = []
 const isShown = t => !!t.view && shownViews.includes(t.view)
 function layout() {
   if (!win) return
-  const tabs = modalOpen || peeking || covered ? [] : visibleTabs()
+  const tabs = modalOpen || peeking || covered ? [] : visibleTabs().filter(t => !t.loadError) // halaman error tampil di UI
   for (const t of tabs) if (!t.view) wake(t) // pasangan split ikut dihidupkan
   const views = tabs.map(t => t.view).filter(Boolean)
   for (const v of shownViews) if (!views.includes(v)) win.contentView.removeChildView(v)
@@ -1176,6 +1210,35 @@ const commands = {
     newTab(c.url, p.id)
   },
   reloadTab: id => state.tabs.find(t => t.id === id)?.view?.webContents.reload(),
+  errRetry: () => {
+    const t = activeTab(), url = t?.loadError?.url
+    if (!t || !url) return
+    t.loadError = null
+    t.view ? t.view.webContents.loadURL(url) : (t.url = url, wake(t))
+    layout(); render(true)
+  },
+  errBack: () => {
+    const t = activeTab()
+    if (!t?.loadError) return
+    const wc = t.view?.webContents
+    t.loadError = null
+    if (wc?.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
+    else { t.url = newTabUrl(); sleep(t) } // tidak ada halaman sebelumnya -> halaman awal
+    layout(); render(true)
+  },
+  certProceed: () => {
+    const t = activeTab(), e = t?.loadError
+    if (e?.kind !== 'cert' || !t.certError?.fingerprint) return
+    certAllowed.set(e.host, t.certError.fingerprint)
+    commands.errRetry()
+  },
+  httpProceed: () => {
+    const t = activeTab(), e = t?.loadError
+    if (e?.kind !== 'https' || !/^http:/.test(e.url)) return
+    httpAllowed.add(e.host)
+    commands.errRetry()
+  },
+  useSystemDns: () => { commands.setting({ key: 'dnsMode', value: 'auto' }); commands.errRetry() },
   allowHttp: ({ id, url }) => {
     const t = state.tabs.find(t => t.id === id)
     if (!t?.view || !/^http:/.test(url)) return
@@ -1756,6 +1819,15 @@ app.whenReady().then(async () => {
     else if (priv && state.privateWipeAfter && now - privSeen > state.privateWipeAfter * 60000) { const back = state.activeProfile; commands.closePrivate(); commands.switchProfile(back) }
     render()
   }, 60 * 1000)
+})
+
+// sertifikat tidak valid: ditolak (Electron default), kecuali user memilih "Proceed anyway" untuk sertifikat yang sama persis
+app.on('certificate-error', (event, wc, url, error, certificate, callback, isMainFrame) => {
+  const host = hostOf(url)
+  if (certAllowed.get(host) === certificate.fingerprint) { event.preventDefault(); return callback(true) }
+  callback(false)
+  const t = isMainFrame && state.tabs.find(t => t.view?.webContents === wc)
+  if (t) t.certError = { url, error, fingerprint: certificate.fingerprint, issuer: certificate.issuerName }
 })
 
 app.on('window-all-closed', () => app.quit())

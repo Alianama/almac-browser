@@ -81,6 +81,13 @@
   <nav id="bmbar"><button type="button" id="bmAll" class="bm-item bm-icon" title="All bookmarks (⌘⌥B)" data-icon="grid"></button><span class="bm-sep"></span><div id="bmItems"></div><button type="button" id="bmMore" class="bm-item bm-icon" title="Other bookmarks" data-icon="more" hidden></button></nav>
   <div id="overlay" hidden><div id="snap" class="snaps"></div></div>
   <div id="frame">
+    <div class="empty err-page" id="errPage" hidden>
+      <canvas id="errCat" width="192" height="192"></canvas>
+      <h2 id="errTitle"></h2>
+      <p id="errText"></p>
+      <code id="errCode"></code>
+      <div id="errActions" class="err-actions"></div>
+    </div>
     <div class="empty" id="empty" hidden>
       <img src="logo.svg" alt="" class="start-logo">
       <h1>ALMAC</h1>
@@ -1103,7 +1110,8 @@ almac.onState(s => {
   if ($('#catBtn').dataset.anim !== catAnim) { $('#catBtn').dataset.anim = catAnim; $('#catBtn').replaceChildren(almiCanvas(catAnim, 24, 2)) }
   $('#catBtn').classList.toggle('home', !s.pet.out)
   // halaman awal: tidak ada tab, atau tab aktif masih kosong (tab baru)
-  const showStart = !s.url
+  renderLoadError(s.loadError)
+  const showStart = !s.url && !s.loadError
   $('#empty').hidden = !showStart
   // fokus ke kolom cari setiap kali pindah ke tab kosong (termasuk ⌘T dari tab kosong lain)
   const activeId = s.tabs.find(t => t.active)?.id ?? 'none'
@@ -1561,9 +1569,6 @@ function renderProfiles(s) {
 almac.onTabCrashed(async ({ id, title }) => {
   if (await confirmModal('Tab crashed', `"${title}" stopped working (out of memory or a page bug).`, 'Reload')) almac.cmd('reloadTab', id)
 })
-almac.onHttpsFailed(async ({ id, url, host, error }) => {
-  if (await confirmModal('Insecure site', `${host} does not support a secure HTTPS connection (${error}). If you continue, anything you send can be read by others on the network. Avoid entering passwords.`, 'Open anyway')) almac.cmd('allowHttp', { id, url })
-})
 
 // ---- command palette (⌘K): tab, bookmark, history, perintah ----
 const PALETTE_CMDS = [
@@ -1813,6 +1818,36 @@ almac.onPwUnlock(() => pwUnlockModal())
 almac.onOpenPasswords(() => openPasswords())
 $('#pwBtn').addEventListener('click', () => openPasswords())
 
+// ---- halaman error (pengganti layar putih): sertifikat tidak valid, situs tanpa HTTPS, jaringan ----
+let errKey = ''
+function renderLoadError(e) {
+  $('#errPage').hidden = !e
+  const key = JSON.stringify(e)
+  if (!e || key === errKey) return
+  errKey = key
+  const btn = (label, cmd, cls = '') => el('button', { type: 'button', className: cls, textContent: label, onclick: () => almac.cmd(cmd) })
+  const unsafe = (label, cmd) => { // dua langkah, supaya tidak terklik tanpa sengaja
+    const b = el('button', { type: 'button', className: 'danger', textContent: label })
+    b.onclick = () => { if (b.dataset.armed) almac.cmd(cmd); else { b.dataset.armed = '1'; b.textContent = 'Click again to continue' } }
+    return b
+  }
+  const T = {
+    cert: ['Your connection is not private', `${e.host}: ${e.text || ''}${e.issuer ? ' Issued by ' + e.issuer + '.' : ''} Someone could be trying to steal your passwords or data.`,
+      [btn('Back to safety', 'errBack', 'primary'), unsafe(`Proceed to ${e.host} (unsafe)`, 'certProceed')]],
+    https: ['This site has no secure connection', `${e.host} does not support HTTPS. Anything you send there (passwords, messages) can be read by others on the network.`,
+      [btn('Go back', 'errBack', 'primary'), unsafe('Open insecure version (http)', 'httpProceed')]],
+    net: ["Can't reach this page", e.dns ? `${e.host} could not be found using DNS-over-HTTPS. Company networks and VPNs often need the system DNS.` : `${e.host || 'This page'} did not load. Check your connection or try again.`,
+      [btn('Try again', 'errRetry', 'primary'), ...(e.dns ? [btn('Use system DNS', 'useSystemDns')] : []), btn('Go back', 'errBack')]],
+  }[e.kind]
+  $('#errTitle').textContent = T[0]
+  $('#errText').textContent = T[1]
+  $('#errCode').textContent = e.code || ''
+  $('#errActions').replaceChildren(...T[2])
+  const ctx = $('#errCat').getContext('2d')
+  const draw = () => { ctx.clearRect(0, 0, 192, 192); almiDraw(ctx, ALMI.anims[e.kind === 'net' ? 'look' : 'alert'][0], 0, 0, 192) }
+  almiImg.complete ? draw() : almiImg.addEventListener('load', draw, { once: true })
+}
+
 // ---- update dari dalam app (updater.js): manifest bertanda tangan Ed25519 + SHA-512 ----
 let updateShown = false, notifiedVersion = ''
 const UPD_TEXT = {
@@ -1848,7 +1883,11 @@ function renderUpdate(u) {
       const m = $('#overlay .modal')
       m.querySelectorAll(':scope > :not(h2, .actions)').forEach(e => e.remove())
       m.querySelector('h2').after(...updateBody(u))
-      if (u.status !== 'available') m.querySelector('.actions').replaceChildren(el('button', { type: 'button', className: 'primary', textContent: 'Close', onclick: closeModal, disabled: u.status === 'downloading' || u.status === 'ready' }))
+      // tombol ikut status: tersedia -> Later + Update & Restart (dulu tetap "Close" kalau modal dibuka saat masih mengecek)
+      m.querySelector('.actions').replaceChildren(...(u.status === 'available'
+        ? [el('button', { type: 'button', textContent: 'Later', onclick: closeModal }),
+           el('button', { type: 'button', className: 'primary', textContent: 'Update & Restart', onclick() { this.disabled = true; almac.cmd('updateDownload') } })]
+        : [el('button', { type: 'button', className: 'primary', textContent: 'Close', onclick: closeModal, disabled: u.status === 'downloading' || u.status === 'ready' })]))
     } else if (u.status === 'available' && notifiedVersion !== u.version) {
       notifiedVersion = u.version
       toast(`Almac v${u.version} is available. Click to update`, 'download', openUpdate)
