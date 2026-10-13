@@ -1324,6 +1324,9 @@ function openSettings(initialTab = 'general') {
       el('div', { className: 'row' }, el('span', { textContent: 'Memory saver: sleep tabs after' }), sleepSeg),
       el('label', { className: 'check' }, bar, el('span', { textContent: 'Show bookmark bar (⌘⇧B)' })),
       el('label', { className: 'check' }, petCheck, el('span', { textContent: 'Almi is out of her house (drag her anywhere, drop tabs on her to close them)' })),
+      el('div', { className: 'row' }, el('span', { textContent: 'Default browser' }),
+        s.defaultBrowser ? el('p', { className: 'modal-text', textContent: '✓ Almac is your default browser. Links from other apps open here.' })
+          : el('button', { type: 'button', disabled: !s.canSetDefault, title: s.canSetDefault ? '' : 'Only in the installed app', onclick: () => { almac.cmd('setDefaultBrowser'); closeModal() } }, iconEl('globe'), 'Set Almac as default browser')),
       el('div', { className: 'row' }, el('span', { textContent: 'Almac Browser v' + s.appVersion }),
         el('button', { type: 'button', onclick: () => { closeModal(); almac.cmd('updateCheck'); setTimeout(openUpdate, 80) } }, iconEl('retry'), 'Check for updates')),
     ]

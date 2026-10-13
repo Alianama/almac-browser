@@ -15,7 +15,24 @@ app.setAboutPanelOptions({ applicationName: 'Almac Browser', applicationVersion:
 if (process.env.ALMAC_TEST_DATA) app.setPath('userData', process.env.ALMAC_TEST_DATA) // tes: folder data terpisah
 // Satu instance saja: dua instance di folder data yang sama bisa merusak database (cookies, service worker)
 if (!app.requestSingleInstanceLock()) app.exit(0)
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus() } })
+// link dari app lain (Mail, Slack, Notes, ...) & file .html: dibuka sebagai tab baru. Datang sebelum jendela siap -> antre.
+const pendingOpen = []
+function openFromOutside(url) {
+  if (!/^(https?:|file:)/i.test(url || '')) return
+  if (!win || !uiReady) return pendingOpen.push(url)
+  if (win.isMinimized()) win.restore()
+  win.show(); win.focus()
+  newTab(url)
+}
+let uiReady = false
+app.on('will-finish-launching', () => {
+  app.on('open-url', (e, url) => { e.preventDefault(); openFromOutside(url) })
+  app.on('open-file', (e, file) => { if (/\.(html?|xhtml|svg|pdf|txt)$/i.test(file)) { e.preventDefault(); openFromOutside(require('url').pathToFileURL(file).href) } })
+})
+app.on('second-instance', (_, argv) => {
+  if (win) { if (win.isMinimized()) win.restore(); win.focus() }
+  argv.filter(a => /^https?:\/\//i.test(a)).forEach(openFromOutside) // Windows/Linux: link datang lewat argumen
+})
 const DATA = app.getPath('userData')
 const STATE_FILE = path.join(DATA, 'state.json')
 const HISTORY_FILE = path.join(DATA, 'history.json')
@@ -444,7 +461,7 @@ function flush() {
     canReopen: closedTabs.length > 0,
     allSleeping: !state.tabs.some(t => t.view),
     blockedToday: state.stats[dayKey()] || 0,
-    appVersion: app.getVersion(), pet: { out: !!state.pet.out }, tabsEaten: state.tabsEaten || 0, update: updater?.get() || { status: 'idle' },
+    appVersion: app.getVersion(), defaultBrowser: app.isDefaultProtocolClient('https'), canSetDefault: app.isPackaged, pet: { out: !!state.pet.out }, tabsEaten: state.tabsEaten || 0, update: updater?.get() || { status: 'idle' },
     pw: { setup: vault.exists(), unlocked: vault.unlocked(), touchId: state.pwTouchId && fs.existsSync(TOUCH_FILE), canTouchId: process.platform === 'darwin' && systemPreferences.canPromptTouchID?.() && safeStorage.isEncryptionAvailable(), lockAfter: state.pwLockAfter },
   })
   const petState = JSON.stringify({ sleeping: !state.tabs.some(t => t.view), today: state.stats[dayKey()] || 0 })
@@ -1160,6 +1177,8 @@ const commands = {
     petSync()
   },
   petFeedEnd: () => { petWin?.webContents.send('pet-hungry', false); petFeedTimer = setTimeout(() => { petFeedTab = null }, 1500) },
+  // jadikan browser default: macOS menampilkan konfirmasi "Use Almac Browser as your default web browser?"
+  setDefaultBrowser: () => { app.setAsDefaultProtocolClient('http'); app.setAsDefaultProtocolClient('https'); setTimeout(() => render(true), 1500) },
   updateCheck: () => updater.check({ manual: true }),
   updateDownload: async () => { await updater.download(); updater.install() }, // tombol "Update & Restart"
   updateInstall: () => updater.install(),
@@ -1801,6 +1820,8 @@ app.whenReady().then(async () => {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   await win.loadFile(path.join(__dirname, 'ui', 'index.html'))
   commands.switchProfile(state.activeProfile)
+  uiReady = true
+  pendingOpen.splice(0).forEach(openFromOutside) // link yang membuka Almac
   if (state.music?.on) toggleMusic()
   if (state.pet.out) petOut(true)
 
