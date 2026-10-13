@@ -34,7 +34,11 @@ let blinkUntil = 0, squashT = -1, held = null, dragVx = 0, lastEat = -1e9, lastP
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d')
 const rnd = (a, b) => a + Math.random() * (b - a)
 const onFloor = () => p.by >= area.floor - 2
-const clampPos = () => { p.cx = Math.max(24, Math.min(area.w - 24, p.cx)); p.by = Math.min(area.floor, p.by) }
+const clampPos = () => {
+  if (!Number.isFinite(p.cx)) p.cx = area.w * 0.75 // jangan pernah NaN: jendela tidak bisa diletakkan & tidak bisa diseret
+  if (!Number.isFinite(p.by)) p.by = area.floor
+  p.cx = Math.max(24, Math.min(area.w - 24, p.cx)); p.by = Math.min(area.floor, p.by)
+}
 // ---- gravitasi: Almi hanya bisa berdiri di permukaan (lantai, tepi atas halaman, tepi atas kartu sidebar) ----
 const spans = (l, x) => x >= l.x1 - 6 && x <= l.x2 + 6
 const ledgeUnder = () => area.ledges.find(l => spans(l, p.cx) && Math.abs(l.y - p.by) <= 2)
@@ -137,6 +141,7 @@ function draw(now) {
 
 // ---- jendela mengikuti posisi ----
 function sendPos(save) {
+  if (held) return // saat diseret, main yang memegang posisi
   clampPos()
   const key = Math.round(p.cx) + ',' + Math.round(p.by)
   if (key === sentPos && !save) return
@@ -159,21 +164,25 @@ function fx(text, color) {
 }
 
 // ---- mouse: seret ke mana saja, lepas = bertengger di situ; klik = dielus; klik dua kali = statistik ----
+// posisi selama diseret datang dari main (mengikuti kursor sistem), halaman hanya menggambar
 cv.addEventListener('pointerdown', e => {
-  if (e.button !== 0 || held) return
-  cv.setPointerCapture(e.pointerId)
-  held = { sx: e.screenX, sy: e.screenY, cx: p.cx, by: p.by, lx: e.screenX, lt: e.timeStamp, moved: false }
+  if (e.button !== 0 || held) return // macOS kadang mengirim mousedown ganda: abaikan
+  try { cv.setPointerCapture(e.pointerId) } catch {}
+  held = { cx: p.cx, by: p.by, lx: p.cx, lt: performance.now(), moved: false }
   dragVx = 0
+  pet.grab(true)
 })
-cv.addEventListener('pointermove', e => {
+pet.onDrag(pos => {
   if (!held) return
-  dragVx = (e.screenX - held.lx) / Math.max(0.001, (e.timeStamp - held.lt) / 1000)
-  held.lx = e.screenX; held.lt = e.timeStamp
-  if (!held.moved && Math.abs(e.screenX - held.sx) + Math.abs(e.screenY - held.sy) > 4) { held.moved = true; document.body.classList.add('held') }
-  if (held.moved) { p.cx = held.cx + e.screenX - held.sx; p.by = held.by + e.screenY - held.sy }
+  const now = performance.now()
+  dragVx = dragVx * 0.6 + 0.4 * (pos.cx - held.lx) / Math.max(0.001, (now - held.lt) / 1000)
+  held.lx = pos.cx; held.lt = now
+  if (!held.moved && Math.abs(pos.cx - held.cx) + Math.abs(pos.by - held.by) > 4) { held.moved = true; document.body.classList.add('held') }
+  p.cx = pos.cx; p.by = pos.by
 })
 function release() {
   if (!held) return
+  pet.grab(false)
   const moved = held.moved
   held = null
   document.body.classList.remove('held')
@@ -191,7 +200,9 @@ function release() {
   say(sleeping ? 'Zzz… all your tabs are asleep' : today ? `Meow! ${today.toLocaleString('en-US')} trackers eaten today` : 'Meow! Drag a tab to me to feed me.')
 }
 cv.addEventListener('pointerup', release)
+addEventListener('pointerup', release) // dilepas di mana pun -> berhenti menyeret
 cv.addEventListener('pointercancel', release)
+addEventListener('blur', release)
 cv.addEventListener('dblclick', e => { if (e.isTrusted) pet.stats() })
 cv.addEventListener('pointerenter', () => { hover = true; if (!p.once && (p.mode === 'walk' || p.mode === 'run')) idleAs('look', 1500) })
 cv.addEventListener('pointerleave', () => { hover = false })
@@ -223,7 +234,7 @@ pet.onArea(a => {
   const near = !held && p.mode !== 'fall' && area.ledges.filter(l => spans(l, p.cx) && Math.abs(l.y - p.by) <= 12).sort((x, y) => Math.abs(x.y - p.by) - Math.abs(y.y - p.by))[0]
   if (near) p.by = near.y
 })
-pet.onPlace(pos => { if (!held) { p.cx = pos.cx; p.by = pos.by; clampPos() } })
+pet.onPlace(pos => { if (!held && Number.isFinite(pos?.cx) && Number.isFinite(pos?.by)) { p.cx = pos.cx; p.by = pos.by; clampPos() } })
 pet.onHungry(on => { hungry = on; if (on) { idleAs('alert', 600); say('Ooh! Drop that tab on me 🍽', 2600) } })
 pet.onEat(n => {
   today = n

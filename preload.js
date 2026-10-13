@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('almac', {
   onOpenPasswords: fn => ipcRenderer.on('open-passwords', fn),
   onOpenUpdate: fn => ipcRenderer.on('open-update', fn),
   onOpenStats: fn => ipcRenderer.on('open-stats', fn),
+  onScreenPick: fn => ipcRenderer.on('screen-pick', (_, r) => fn(r)),
   onPwSave: fn => ipcRenderer.on('pw-save', (_, r) => fn(r)),
   onPwUnlock: fn => ipcRenderer.on('pw-unlock', fn),
   onToast: fn => ipcRenderer.on('toast', (_, text) => fn(text)),

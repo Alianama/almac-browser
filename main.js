@@ -1,4 +1,5 @@
-const { app, BrowserWindow, WebContentsView, session, ipcMain, Menu, nativeTheme, dialog, clipboard, shell, screen, safeStorage, systemPreferences, powerMonitor } = require('electron')
+const { app, BrowserWindow, WebContentsView, session, ipcMain, Menu, nativeTheme, dialog, clipboard, shell, screen, safeStorage, systemPreferences, powerMonitor, desktopCapturer } = require('electron')
+const os = require('os')
 const crypto = require('crypto')
 const path = require('path')
 const fs = require('fs')
@@ -143,11 +144,47 @@ function pwOffer(t) {
   win.webContents.send('pw-save', { id, host: new URL(c.origin).host, username: c.username, update: !!c.update })
 }
 
+// ---- picker share screen (dipakai kalau picker sistem macOS tidak tersedia) ----
+const pendingScreens = new Map()
+let screenSeq = 0
+async function pickScreen(request) {
+  if (!win) return null
+  let host = ''
+  try { host = new URL(request.securityOrigin).host } catch {}
+  const perm = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted'
+  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 200 }, fetchWindowIcons: true })
+  const own = new Set(['Almi', 'Radio'])
+  const list = sources.filter(s => !own.has(s.name))
+  const id = ++screenSeq
+  win.focus()
+  win.webContents.send('screen-pick', {
+    id, host, permission: perm,
+    sources: list.map(s => ({ id: s.id, name: s.name, kind: s.id.startsWith('screen') ? 'screen' : 'window',
+      thumb: s.thumbnail.isEmpty() ? '' : 'data:image/jpeg;base64,' + s.thumbnail.toJPEG(70).toString('base64'),
+      icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : '' })),
+  })
+  const chosen = await new Promise(resolve => pendingScreens.set(id, resolve))
+  return list.find(s => s.id === chosen) || null
+}
+
 // DNS-over-HTTPS berlaku untuk seluruh app (Chromium: satu resolver untuk semua sesi)
+// VPN (GlobalProtect, Tailscale, WARP, ...): interface tunnel dengan IPv4. Selama tersambung, DoH dijeda -> DNS sistem/VPN
+// (DNS internal kantor tidak dikenal DoH publik & VPN sering memblokir DoH -> tanpa ini tidak bisa internetan).
+const vpnActive = () => Object.entries(os.networkInterfaces()).some(([name, addrs]) =>
+  /^(utun|gpd|ppp|ipsec|tun|tap|wg)/i.test(name) && addrs.some(a => a.family === 'IPv4' && !a.internal && !a.address.startsWith('169.254.')))
+let dnsVpn = null
 function applyDns() {
   const url = /^https:\/\//.test(state.customDns || '') ? state.customDns : ''
-  if (state.dnsMode === 'doh' && url) app.configureHostResolver({ secureDnsMode: 'secure', secureDnsServers: [url] })
+  dnsVpn = vpnActive()
+  if (state.dnsMode === 'doh' && url && !dnsVpn) app.configureHostResolver({ secureDnsMode: 'secure', secureDnsServers: [url] })
   else app.configureHostResolver({ secureDnsMode: state.dnsMode === 'off' ? 'off' : 'automatic' })
+  for (const c of Object.values(ctx)) c.ses.clearHostResolverCache().catch(() => {}) // jawaban DNS lama jangan dipakai lagi
+}
+function watchVpn() {
+  if (vpnActive() === dnsVpn) return
+  applyDns()
+  if (state.dnsMode === 'doh') win?.webContents.send('toast', dnsVpn ? 'VPN connected: DNS-over-HTTPS paused so company sites work' : 'VPN disconnected: DNS-over-HTTPS is back on')
+  render()
 }
 
 // ---- izin situs (seperti Chrome: tanya dulu, bisa diingat per situs) ----
@@ -364,8 +401,9 @@ function flush() {
     })),
     activeWs: activeWs(),
     accent: profileOf(state.activeProfile).workspaces.find(w => w.id === activeWs())?.color || profileOf(state.activeProfile).color,
-    tabs: state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === activeWs()).map(t => ({
+    tabs: state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === activeWs()).sort((a, b) => !!b.pinned - !!a.pinned).map(t => ({
       id: t.id, title: t.title || t.url || 'New tab', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
+      pinned: !!t.pinned, atPin: !t.pinned || t.url === t.pinUrl,
     })),
     url: active?.url || '',
     security: security(active),
@@ -382,7 +420,7 @@ function flush() {
     engines: Object.entries(ENGINES).map(([id, e]) => ({ id, name: e.name })),
     bookmarksVersion: bookmarksVersion + '|' + state.activeProfile,
     extensions: extList(state.activeProfile),
-    customDns: state.customDns || '', dnsMode: state.dnsMode || 'auto',
+    customDns: state.customDns || '', dnsMode: state.dnsMode || 'auto', dnsPausedForVpn: state.dnsMode === 'doh' && !!dnsVpn,
     blockJavaScript: !!state.blockJavaScript, cookiePolicy: state.cookiePolicy || 'allow',
     doNotTrack: !!state.doNotTrack, hardwareAcceleration: state.hardwareAcceleration !== false,
     music: !!musicWin,
@@ -398,7 +436,7 @@ function flush() {
   if (petWin && petState !== petSent) { petSent = petState; petWin.webContents.send('pet-state', JSON.parse(petState)) }
   // profil privat tidak pernah ditulis ke disk
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
-  const tabs = state.tabs.filter(t => !priv.has(t.profileId)).map(({ profileId, wsId, url, title, favicon, lastActive, group }) => ({ profileId, wsId, url, title, favicon, lastActive, group }))
+  const tabs = state.tabs.filter(t => !priv.has(t.profileId)).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl }))
   const profiles = state.profiles.filter(p => !p.ephemeral)
   const sitePerms = Object.fromEntries(Object.entries(state.sitePerms).filter(([id]) => !priv.has(id)))
   const activeProfile = priv.has(state.activeProfile) ? profiles[0]?.id : state.activeProfile
@@ -449,6 +487,11 @@ function profileCtx(profileId) {
     cb(-3)
   })
   ses.setPermissionRequestHandler((wc, permission, callback, details) => { onPermissionRequest(profileId, permission, details).then(callback) })
+  // share screen (Meet, Zoom, Teams, ...): tanpa handler ini getDisplayMedia selalu ditolak Electron.
+  // macOS 15+: picker bawaan sistem (handler tidak dipanggil); selain itu picker Almac.
+  ses.setDisplayMediaRequestHandler((request, callback) => {
+    pickScreen(request).then(src => callback(src ? { video: src } : null)).catch(e => { console.error('share screen:', e); callback(null) })
+  }, { useSystemPicker: true })
   ses.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
     if (PERM_DENY.has(permission)) return false
     const kinds = permKinds(permission, details.mediaType ? [details.mediaType] : [])
@@ -877,10 +920,10 @@ const commands = {
     ;[list[i], list[j]] = [list[j], list[i]]
     render(true)
   },
-  wsCloseTabs: id => {
+  wsCloseTabs: id => { // tab dipin tetap ada
     const p = profileOf(state.activeProfile)
-    state.tabs.filter(t => t.profileId === p.id && t.wsId === id).forEach(sleep)
-    state.tabs = state.tabs.filter(t => !(t.profileId === p.id && t.wsId === id))
+    state.tabs.filter(t => t.profileId === p.id && t.wsId === id && !t.pinned).forEach(sleep)
+    state.tabs = state.tabs.filter(t => !(t.profileId === p.id && t.wsId === id && !t.pinned))
     layout()
     render(true)
   },
@@ -964,6 +1007,29 @@ const commands = {
     layout(); render()
   },
 
+  // tab dipin: tampil sebagai ubin di atas, tersimpan, tidak tertutup oleh ⌘W / "close all tabs"
+  pinTab: id => {
+    const t = state.tabs.find(t => t.id === (id ?? activeTab()?.id))
+    if (!t || !t.url) return
+    t.pinned = !t.pinned
+    if (t.pinned) t.pinUrl = t.url; else delete t.pinUrl
+    render(true)
+  },
+  pinReset: id => { const t = state.tabs.find(t => t.id === id); if (t?.pinUrl) { t.view ? t.view.webContents.loadURL(t.pinUrl) : (t.url = t.pinUrl, selectTab(t)) } },
+  closePinned: id => { const t = state.tabs.find(t => t.id === id); if (t) { t.pinned = false; closeTab(t) } },
+  // ⌘W: tab biasa ditutup; tab dipin hanya ditidurkan & pindah ke tab lain (seperti Arc)
+  closeActive: () => {
+    const t = activeTab()
+    if (!t) return
+    if (!t.pinned) return closeTab(t)
+    const next = state.tabs.filter(x => x !== t && x.profileId === t.profileId && x.wsId === t.wsId).sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0]
+    if (!next) return win?.webContents.send('toast', 'This pinned tab stays. Right-click it to unpin or close')
+    unsplit(t)
+    t.lastActive = 0
+    selectTab(next)
+    sleep(t); render(true)
+    win?.webContents.send('toast', 'Pinned tab kept. Right-click it to unpin or close')
+  },
   sleepTab: id => { const t = state.tabs.find(t => t.id === id); if (t && !isShown(t)) { sleep(t); render() } },
   sleepOthers: id => { for (const t of state.tabs) if (t.id !== id && t.view && !isShown(t) && !t.view.webContents.isCurrentlyAudible()) sleep(t); render() },
   copyUrl: id => clipboard.writeText(state.tabs.find(t => t.id === id)?.url || ''),
@@ -1042,6 +1108,8 @@ const commands = {
     vault.save(); pwTouch()
   },
   pwLock,
+  screenPick: ({ id, sourceId }) => { const r = pendingScreens.get(id); pendingScreens.delete(id); r?.(sourceId || null) },
+  openScreenSettings: () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'),
   // tombol "Fill" di pengelola / ⌘⇧L: kirim ke halaman aktif, hanya kalau login itu memang untuk situs tersebut
   pwFillActive: id => {
     const t = activeTab(), wc = t?.view?.webContents
@@ -1446,6 +1514,23 @@ const PET_BASE = { w: 112, h: 112 }
 let petWin = null, petSent = '', petSize = { ...PET_BASE }, petAreaSent = ''
 let petFeedTab = null, petFeedTimer // tab yang sedang diseret dari sidebar (untuk dimakan)
 let petUiLedges = [] // tepi atas kartu sidebar (dilaporkan UI), tempat Almi bisa bertengger
+// seret: main sendiri mengikuti kursor (posisi dari sistem, 60x/detik). Kalau halaman pet yang memindahkan jendelanya
+// berdasarkan event mouse, jendela bergeser di bawah kursor & macOS kadang berhenti mengirim event -> seret macet.
+let petDrag = null, petDragTimer = null
+function petDragStop() { clearInterval(petDragTimer); petDragTimer = null; petDrag = null }
+function petDragStart() {
+  if (!petWin || !win) return
+  const c = win.getContentBounds(), cur = screen.getCursorScreenPoint()
+  petDrag = { dx: state.pet.cx - (cur.x - c.x), dy: state.pet.by - (cur.y - c.y), t: Date.now() }
+  clearInterval(petDragTimer)
+  petDragTimer = setInterval(() => {
+    if (!petWin || !petDrag || Date.now() - petDrag.t > 60000) return petDragStop() // pengaman: lepas setelah 1 menit
+    const c = win.getContentBounds(), cur = screen.getCursorScreenPoint()
+    state.pet.cx = cur.x - c.x + petDrag.dx; state.pet.by = cur.y - c.y + petDrag.dy
+    petPlace()
+    petWin.webContents.send('pet-drag', { cx: state.pet.cx, by: state.pet.by })
+  }, 16)
+}
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
 // permukaan pijakan (gravitasi): lantai halaman, tepi atas halaman web, dan tepi atas kartu sidebar. {x1, x2, y} relatif konten
 function petArea() {
@@ -1461,8 +1546,8 @@ function petArea() {
 function petPlace() {
   if (!petWin) return
   const a = petArea(), p = state.pet, c = win.getContentBounds()
-  p.cx = clamp(p.cx ?? a.left + (a.w - a.left) * 0.75, 40, a.w - 40)
-  p.by = clamp(p.by ?? a.floor, 40, a.floor)
+  p.cx = clamp(Number.isFinite(p.cx) ? p.cx : a.w * 0.75, 40, a.w - 40) // posisi rusak/kosong -> default
+  p.by = clamp(Number.isFinite(p.by) ? p.by : a.floor, 40, a.floor)
   petWin.setBounds({ x: Math.round(c.x + p.cx - petSize.w / 2), y: Math.round(c.y + p.by - petSize.h), width: petSize.w, height: petSize.h })
 }
 function petSync() {
@@ -1486,7 +1571,7 @@ function petOut(out) {
   })
   petWin.webContents.on('will-navigate', e => e.preventDefault())
   petWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  petWin.on('closed', () => { petWin = null; petSent = ''; petAreaSent = '' })
+  petWin.on('closed', () => { petWin = null; petSent = ''; petAreaSent = ''; petDragStop() })
   petWin.webContents.once('did-finish-load', () => {
     petSent = ''; petAreaSent = ''
     render(true); petSync()
@@ -1496,7 +1581,8 @@ function petOut(out) {
 }
 ipcMain.on('pet', (e, type, arg) => {
   if (e.sender !== petWin?.webContents) return
-  if (type === 'pos' && Number.isFinite(arg?.cx) && Number.isFinite(arg?.by)) {
+  if (type === 'grab') return arg ? petDragStart() : petDragStop()
+  if (type === 'pos' && !petDrag && Number.isFinite(arg?.cx) && Number.isFinite(arg?.by)) {
     state.pet.cx = arg.cx; state.pet.by = arg.by
     petPlace()
     if (arg.save) render() // posisi bertengger disimpan
@@ -1533,7 +1619,8 @@ function buildMenu() {
       label: 'Tab',
       submenu: [
         { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => { commands.newTab(); send('focus-url')() } },
-        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => { const t = activeTab(); if (t) closeTab(t) } },
+        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => commands.closeActive() },
+        { label: 'Pin / Unpin Tab', accelerator: 'CmdOrCtrl+Shift+D', click: () => commands.pinTab() },
         { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => commands.reopenTab() },
         { label: 'Command Palette', accelerator: 'CmdOrCtrl+K', click: send('open-palette') },
         { label: 'New Private Tab', accelerator: 'CmdOrCtrl+Shift+N', click: () => commands.openPrivate() },
@@ -1577,6 +1664,7 @@ function buildMenu() {
 app.whenReady().then(async () => {
   load()
   applyDns()
+  setInterval(watchVpn, 5000) // GlobalProtect dll. tersambung/putus -> DoH dijeda/aktif lagi
   nativeTheme.themeSource = state.theme
   try {
     // Daftar filter yang sama dipakai Ghostery/uBlock (EasyList, EasyPrivacy, dll), di-cache ke disk

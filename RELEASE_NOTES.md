@@ -1,33 +1,20 @@
-## 🐱 Almi 2.0: your pixel cat
-- **Redrawn** as crisp, cute pixel art: a pink-and-white chibi cat with 52 frames of smooth animation, including a 4-legged walk, run, jump, blink, wave, happy, a big-mouth chomp and a curled-up sleep.
-- **Gravity**: drag Almi anywhere, let go, and she falls onto the first surface below: the page floor, the top edge of the page, or the sidebar cards. She perches there and only walks along that surface.
-- **Feed her tabs**: drag a tab from the sidebar onto Almi. She opens a big mouth, eats it, and the tab closes (⌘⇧T brings it back).
-- **Almi's house**: the cat button in the sidebar opens her house, where you can let her out or call her home to nap.
+## 📌 Pinned tabs
+- Pin a tab from the right-click menu, with **⌘⇧D**, or from the command palette. Pinned tabs show as icon tiles at the top of the tab list and are kept across restarts.
+- **⌘W does not close a pinned tab**: it goes to sleep and Almac switches to another tab. Right-click a tile to unpin it, go back to its pinned page, or close it.
+- **Close all tabs** in a workspace keeps pinned tabs.
 
-## 🔑 Almac Passwords works like Bitwarden
-- **Cat icon** inside login fields, and a dropdown whenever a login field is focused. Use the keyboard (↑ ↓ Enter) to choose a login.
-- **Email-first sign-ins** (Google, Microsoft and others) now work: the email from the first step is filled, remembered and saved together with the password.
-- **⌘⇧L** fills the login for the current site. The password manager has a new **This site → Fill** section.
-- **Set up** is offered right from the login field, and the dropdown reappears right after you unlock.
-- Fields inside shadow DOM are now detected.
+## 🖥️ Screen sharing in meetings
+- Google Meet, Zoom web, Teams and other sites can now share your screen. On macOS 15+ Almac uses the native macOS picker; on older versions it shows its own picker for screens and windows.
+- If the Screen Recording permission is missing, Almac shows a shortcut to the right System Settings page.
 
-## ✨ Other changes
-- The ad & tracker counter moved to the top of the sidebar.
-- The radio button now uses a headphones icon.
+## 🌐 VPN (GlobalProtect and others)
+- **Fixed:** pages did not load while a company VPN was connected if DNS-over-HTTPS was on. Almac now detects the VPN, pauses DNS-over-HTTPS and uses the VPN's DNS, then turns DoH back on when the VPN disconnects.
 
-## ⬆️ In-app updates (new)
-- Almac checks for updates when it opens and every 6 hours. You can also check from **Almac Browser › Check for Updates…**, the command palette (⌘K) or Settings.
-- One click on **Update & Restart** installs the update. Your tabs, passwords and settings are kept.
-- Every update is signed with **Ed25519** and verified with **SHA-512**. A tampered or forged update is refused.
-- The app is now signed with a stable certificate. After you click **Always Allow** on the Keychain prompt once, later updates no longer ask.
+## 🐱 Almi
+- **Fixed:** Almi could not be dragged, especially on a fresh profile. Dragging now follows the system cursor directly, so it no longer gets stuck.
 
-> **Install this version once manually**: quit Almac, then replace the app in Applications. Updates are automatic from here on.
-
-## Install
-- `Almac-Browser-1.3.0-arm64.dmg` → Apple Silicon
-- `Almac-Browser-1.3.0-x64.dmg` → Intel
-
-The app is not notarized. On first launch, right-click the app and choose **Open**, or run:
-`xattr -dr com.apple.quarantine "/Applications/Almac Browser.app"`
+## Install / update
+- Already on **v1.3.0**? Click **Update & Restart** when the update notification appears, or use **Almac Browser › Check for Updates…**.
+- New install: `Almac-Browser-1.3.1-arm64.dmg` (Apple Silicon) or `Almac-Browser-1.3.1-x64.dmg` (Intel).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

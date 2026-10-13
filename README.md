@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.3.0-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.3.1-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">

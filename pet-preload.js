@@ -6,8 +6,9 @@ contextBridge.exposeInMainWorld('pet', {
   pos: p => ipcRenderer.send('pet', 'pos', p),
   size: s => ipcRenderer.send('pet', 'size', s),
   stats: () => ipcRenderer.send('pet', 'stats'),
+  grab: on => ipcRenderer.send('pet', 'grab', !!on),
   gone: () => ipcRenderer.send('pet', 'gone'),
   eatTab: () => ipcRenderer.invoke('pet-eat'),
   onState: on('pet-state'), onArea: on('pet-area'), onPlace: on('pet-place'), onHungry: on('pet-hungry'),
-  onEat: on('pet-eat'), onEnter: on('pet-enter'), onLeave: on('pet-leave'),
+  onEat: on('pet-eat'), onEnter: on('pet-enter'), onLeave: on('pet-leave'), onDrag: on('pet-drag'),
 })

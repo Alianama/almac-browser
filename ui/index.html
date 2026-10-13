@@ -725,6 +725,40 @@ almac.onPermRequest(({ id, host, kinds }) => {
   ], () => { if (!answered) almac.cmd('permAnswer', { id, allow: false, remember: false }) })
 })
 
+// ---- share screen: pilih layar / jendela (picker sistem macOS dipakai kalau tersedia) ----
+almac.onScreenPick(({ id, host, permission, sources }) => {
+  let chosen = null, answered = false
+  const answer = sourceId => { answered = true; almac.cmd('screenPick', { id, sourceId }) }
+  const share = el('button', { type: 'button', className: 'primary', textContent: 'Share', disabled: true, onclick: () => { answer(chosen); closeModal() } })
+  const grid = el('div', { className: 'screen-grid' })
+  const show = kind => {
+    tabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.kind === kind))
+    grid.replaceChildren(...sources.filter(s => s.kind === kind).map(s => {
+      const card = el('button', { type: 'button', className: 'screen-card', title: s.name,
+        onclick() { chosen = s.id; share.disabled = false; grid.querySelectorAll('.screen-card').forEach(c => c.classList.toggle('on', c === this)) },
+        ondblclick() { answer(s.id); closeModal() } },
+        s.thumb ? el('img', { src: s.thumb, alt: '' }) : el('div', { className: 'screen-blank' }),
+        el('span', {}, ...(s.icon ? [el('img', { className: 'screen-ico', src: s.icon, alt: '' })] : []), document.createTextNode(s.name)))
+      return card
+    }))
+    if (!grid.children.length) grid.append(el('p', { className: 'none', textContent: 'Nothing to share here.' }))
+  }
+  const tabs = el('div', { className: 'seg' }, ...[['screen', 'Entire screen'], ['window', 'Window']].map(([k, t]) => {
+    const b = el('button', { type: 'button', textContent: t, onclick: () => show(k) }); b.dataset.kind = k; return b
+  }))
+  const noPerm = permission !== 'granted'
+  openModal('Share your screen', [
+    el('p', { className: 'modal-text' }, el('b', { textContent: host || 'This site' }), ' wants to see your screen.'),
+    ...(noPerm ? [el('div', { className: 'site-card bad' }, iconEl('warn'), el('div', { className: 'meta' },
+      el('b', { textContent: 'Screen Recording permission needed' }),
+      el('small', { textContent: 'Allow Almac Browser in System Settings › Privacy & Security › Screen & System Audio Recording, then reopen Almac.' })),
+      el('button', { type: 'button', onclick: () => almac.cmd('openScreenSettings') }, 'Open Settings'))] : []),
+    tabs, grid,
+  ], [{ label: 'Cancel' }], () => { if (!answered) answer(null) })
+  $('#overlay .modal .actions').append(share)
+  show('screen')
+})
+
 // ---- sidebar: sembunyikan/tampilkan, muncul otomatis dari tepi kiri, ubah lebar ----
 const GAP_PX = 10 // samakan dengan --gap / GAP di main.js
 let peek = false, peekTimer
@@ -1164,8 +1198,28 @@ function renderExtensions(s) {
   }) : [el('p', { className: 'none', textContent: 'No extensions yet. Install them from the Chrome Web Store.' })]))
 }
 const seen = new Set()
+// tab dipin: ubin favicon di atas daftar tab
+function pinnedTile(t) {
+  const tile = el('button', {
+    type: 'button', className: 'pin-tile' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : ''), title: t.title + '\n' + (t.url || ''),
+    onclick: () => almac.cmd('select', t.id),
+    oncontextmenu: e => {
+      e.preventDefault()
+      ctxMenu(e.clientX, e.clientY, [
+        { icon: 'pin', label: 'Unpin tab', onClick: () => almac.cmd('pinTab', t.id) },
+        { icon: 'retry', label: 'Back to pinned page', disabled: t.atPin, onClick: () => almac.cmd('pinReset', t.id) },
+        { icon: 'copy', label: 'Copy URL', onClick: () => almac.cmd('copyUrl', t.id) },
+        '-',
+        { icon: 'x', label: 'Close pinned tab', danger: true, onClick: () => almac.cmd('closePinned', t.id) },
+      ])
+    },
+  }, t.favicon ? el('img', { src: t.favicon, alt: '', onerror() { this.replaceWith(el('b', { textContent: (t.title || '?')[0].toUpperCase() })) } }) : el('b', { textContent: (t.title || '?')[0].toUpperCase() }))
+  return tile
+}
 function renderTabs(tabs) {
-  $('#tabs').replaceChildren(...tabs.map(t => {
+  const pinned = tabs.filter(t => t.pinned)
+  tabs = tabs.filter(t => !t.pinned)
+  $('#tabs').replaceChildren(...(pinned.length ? [el('div', { className: 'pin-grid' }, ...pinned.map(pinnedTile))] : []), ...tabs.map(t => {
     const fav = el('div', { className: 'fav' }, t.favicon
       ? el('img', { src: t.favicon, onerror() { this.replaceWith(el('i')) } })
       : el('i'))
@@ -1184,6 +1238,7 @@ function renderTabs(tabs) {
         ctxMenu(e.clientX, e.clientY, [
           ...others.map(w => ({ icon: 'move', label: 'Move to ' + w.name, onClick: () => almac.cmd('tabMove', { id: t.id, wsId: w.id }) })),
           ...(others.length ? ['-'] : []),
+          { icon: 'pin', label: 'Pin tab (⌘⇧D)', disabled: !t.url, onClick: () => almac.cmd('pinTab', t.id) },
           { icon: 'copy', label: 'Copy URL', onClick: () => almac.cmd('copyUrl', t.id) },
           '-',
           ...(t.split
@@ -1199,7 +1254,7 @@ function renderTabs(tabs) {
       },
     }, fav, el('span', { textContent: t.title }), ...(t.split ? [el('span', { className: 'split-mark', title: 'Split view' }, iconEl('split'))] : []), ...(t.sleeping ? [el('em', { className: 'zz', textContent: 'zz' })] : []), x)
   }))
-  tabs.forEach(t => seen.add(t.id))
+  ;[...pinned, ...tabs].forEach(t => seen.add(t.id))
 }
 
 function editProfile(p) {
@@ -1354,6 +1409,9 @@ function openSettings(initialTab = 'general') {
     return [
       el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('globe'), el('span', { textContent: 'DNS Settings' })),
         el('div', { className: 'row' }, el('span', { textContent: 'Mode DNS' }), modeSeg),
+        ...(s.dnsPausedForVpn ? [el('div', { className: 'site-card' }, iconEl('info'), el('div', { className: 'meta' },
+          el('b', { textContent: 'Paused while your VPN is connected' }),
+          el('small', { textContent: 'Company VPNs (GlobalProtect, etc.) use their own DNS. Almac uses it until the VPN disconnects, then DNS-over-HTTPS turns back on.' })))] : []),
         presets,
         dnsSection,
         el('p', { className: 'modal-text', style: 'font-size:11px;line-height:1.6' },
@@ -1511,6 +1569,7 @@ almac.onHttpsFailed(async ({ id, url, host, error }) => {
 const PALETTE_CMDS = [
   ['New tab', 'plus', () => almac.cmd('newTab'), '⌘T'],
   ['Reopen closed tab', 'retry', () => almac.cmd('reopenTab'), '⌘⇧T'],
+  ['Pin / unpin tab', 'pin', () => almac.cmd('pinTab'), '⌘⇧D'],
   ['New private tab', 'private', () => almac.cmd('openPrivate'), '⌘⇧N'],
   ['Picture in picture', 'tv', () => almac.cmd('pip'), '⌘⌥P'],
   ['Start focus (25 min)', 'target', () => almac.cmd('focusStart', 25)],
