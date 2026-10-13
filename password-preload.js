@@ -97,22 +97,33 @@ if (window === window.top && (location.protocol === 'https:' || location.hostnam
     menu.style.top = (r.bottom + menu.offsetHeight + 8 > innerHeight ? r.top - menu.offsetHeight - 4 : r.bottom + 4) + 'px'
   }
 
+  function narrow(text) {
+    const q = text.trim().toLowerCase()
+    const logins = allItems.filter(it => it.login && it.label.toLowerCase().startsWith(q))
+    if (!q || !logins.length || isPw(anchor)) return close()
+    show(anchor, logins, lastHead)
+  }
+  let lastHead = '', allItems = []
   async function offer(field) {
     const { pw } = fieldsAround(field)
     const isNew = isPw(field) && (field.autocomplete === 'new-password' || allInputs().filter(isPw).length > 1)
     const s = await ask('query')
     if (!s || anchor && anchor !== field) return
+    if (isPw(field) && field.value) return // sudah mulai mengetik password: jangan munculkan dropdown yang menutupi tombol login
     const list = []
     if (!s.setup) list.push({ label: 'Set up Almac Passwords', sub: 'save & autofill', run: () => ask('unlock') })
     else if (s.locked) list.push({ label: 'Unlock Almac Passwords', sub: '⌘⇧L', run: () => ask('unlock') })
-    for (const l of s.logins || []) list.push({ label: l.username || '(no username)', sub: l.chosen ? 'continue' : pw ? 'fill' : 'fill email', run: () => fill(field, l.id) })
+    for (const l of s.logins || []) list.push({ login: true, label: l.username || '(no username)', sub: l.chosen ? 'continue' : pw ? 'fill' : 'fill email', run: () => fill(field, l.id) })
     if (s.setup && !s.locked && !s.logins?.length && !isNew) list.push({ label: 'No saved login for ' + s.host, sub: 'sign in to save', run: () => {} })
     if (isNew) list.push({ label: 'Use a strong password', sub: 'generated', run: async () => {
       const g = await ask('generate')
       allInputs().filter(i => isPw(i) && inScope(i, scopeOf(field))).forEach(p => setVal(p, g))
     } })
     if (s.setup) list.push('-', { label: 'Manage passwords…', sub: '⌘⇧P', run: () => ask('manager') })
-    show(field, list, s.logins?.length ? `Almac Passwords · ${s.host}` : '')
+    allItems = list
+    if (field.value && !isPw(field)) { anchor = field; lastHead = s.logins?.length ? `Almac Passwords · ${s.host}` : ''; return narrow(field.value) } // sudah ada isinya: langsung disaring
+    lastHead = s.logins?.length ? `Almac Passwords · ${s.host}` : ''
+    show(field, list, lastHead)
   }
 
   const target = e => e.composedPath?.()[0] || e.target
@@ -132,10 +143,17 @@ if (window === window.top && (location.protocol === 'https:' || location.hostnam
   addEventListener('scroll', () => { close(); placeIcons() }, true)
   addEventListener('resize', () => { close(); placeIcons() })
 
-  // ikon kucing di sisi kanan kolom login (klik = buka dropdown)
-  let iconTimer
+  // ikon kucing di sisi kanan kolom login (klik = buka dropdown).
+  // Hemat CPU: cek murah dulu (selector biasa); penelusuran shadow DOM paling sering tiap 3 dtk.
+  let iconTimer, lastDeep = 0
+  const LOGIN_SEL = 'input[type=password], input[type=email], input[autocomplete~=username], input[autocomplete~=email], input[name*=user i], input[name*=email i], input[name*=login i], input[id*=user i], input[id*=email i]'
   function placeIcons() {
     const box = ui.getElementById('icons')
+    if (!document.querySelector(LOGIN_SEL)) {
+      const now = performance.now()
+      if (now - lastDeep < 3000) return box.childElementCount && box.replaceChildren()
+      lastDeep = now
+    }
     const fields = loginFields()
     if (!fields.length) return box.replaceChildren()
     mount()
@@ -150,7 +168,7 @@ if (window === window.top && (location.protocol === 'https:' || location.hostnam
     }))
   }
   const schedule = () => { iconTimer ||= setTimeout(() => { iconTimer = null; placeIcons() }, 300) } // throttle: halaman beranimasi tetap dapat ikon
-  new MutationObserver(schedule).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['type', 'style', 'class', 'hidden'] })
+  new MutationObserver(schedule).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['type'] }) // class/style berubah terus di SPA -> diabaikan
   addEventListener('load', schedule)
 
   // ⌘⇧L (menu Almac) / tombol "Fill" di pengelola: isi login untuk situs ini
@@ -167,27 +185,51 @@ if (window === window.top && (location.protocol === 'https:' || location.hostnam
 
   ipcRenderer.on('pw-unlocked', () => { const f = loginFields().find(x => x.matches(':focus')); if (f) offer(f) })
 
-  // ---- tawarkan simpan: submit, Enter, atau klik tombol di form login (SPA tanpa submit) ----
-  let lastSent = ''
-  function capture(scope) {
-    const root = scope || document
-    const pw = allInputs().find(i => isPw(i) && i.value && inScope(i, root))
-    if (!pw) { // langkah email saja (Google, Microsoft, dll): ingat username untuk langkah password
-      const u = allInputs().find(i => isUser(i) && i.value && inScope(i, root))
-      if (u) ask('user', u.value)
-      return
-    }
-    const username = userFor(pw)?.value || ''
-    const key = username + '\n' + pw.value
-    if (key === lastSent) return
-    lastSent = key
-    ask('capture', { username, password: pw.value })
-  }
-  document.addEventListener('submit', e => { if (e.isTrusted) capture(e.target) }, true)
-  document.addEventListener('keydown', e => { const t = target(e); if (e.isTrusted && e.key === 'Enter' && !menu && (isPw(t) || isUser(t))) capture(scopeOf(t)) }, true)
-  document.addEventListener('click', e => {
+  // ---- tawarkan simpan setelah login berhasil (seperti Chrome) ----
+  // Password dicatat saat diketik, dikirim ke main saat submit / Enter / klik apa pun (bukan saat halaman ditinggalkan:
+  // password yang tidak pernah dikirim tidak ditawarkan).
+  // Main baru menawarkan simpan kalau login tampak berhasil: halaman pindah, atau kolom password hilang
+  // (login XHR tanpa ganti URL). Password salah -> kolom tetap ada -> tidak ditawarkan.
+  let draft = null, lastSent = '', watch = null
+  document.addEventListener('input', e => {
     const t = target(e)
-    const b = e.isTrusted && t.closest?.('button, input[type=submit], [role=button]')
-    if (b) capture(b.form || b.closest('form') || document)
+    if (e.isTrusted && menu && t === anchor) narrow(t.value) // mengetik: dropdown menyaring / menutup (tidak menutupi kolom berikutnya)
+    if (!e.isTrusted || !isPw(t) || !t.value) return
+    draft = { el: t, password: t.value, username: userFor(t)?.value || '' }
+  }, true)
+  function capture() {
+    if (!draft) return
+    draft.password = draft.el.isConnected ? draft.el.value || draft.password : draft.password
+    draft.username = (draft.el.isConnected && userFor(draft.el)?.value) || draft.username
+    if (!draft.password) return
+    const key = draft.username + '\n' + draft.password
+    if (key !== lastSent) { lastSent = key; ask('capture', { username: draft.username, password: draft.password }) }
+    watchGone()
+  }
+  // kolom password hilang / disembunyikan setelah submit = login berhasil tanpa pindah halaman
+  function watchGone() {
+    clearInterval(watch)
+    const el = draft.el, until = Date.now() + 20000
+    watch = setInterval(() => {
+      if (Date.now() > until) return clearInterval(watch)
+      if (!el.isConnected || !visible(el)) { clearInterval(watch); ask('gone') }
+    }, 400)
+  }
+  // langkah email saja (Google, Microsoft, dll): ingat username untuk langkah password
+  function captureUser(scope) {
+    const u = allInputs().find(i => isUser(i) && i.value && inScope(i, scope || document))
+    if (u) ask('user', u.value)
+  }
+  document.addEventListener('submit', e => { if (e.isTrusted) draft ? capture() : captureUser(e.target) }, true)
+  document.addEventListener('keydown', e => {
+    const t = target(e)
+    if (!e.isTrusted || e.key !== 'Enter' || menu) return
+    if (isPw(t) || (draft && isUser(t))) capture(); else if (isUser(t)) captureUser(scopeOf(t))
+  }, true)
+  // klik elemen apa pun (banyak tombol login berupa <div>), selama ada password yang sudah diketik
+  document.addEventListener('pointerdown', e => {
+    if (!e.isTrusted) return
+    if (draft) setTimeout(capture, 0)
+    else { const b = target(e).closest?.('button, input[type=submit], [role=button], a'); if (b) captureUser(b.form || b.closest('form') || document) }
   }, true)
 }

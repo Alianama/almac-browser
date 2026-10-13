@@ -75,7 +75,7 @@ process.on('uncaughtException', e => {
 })
 
 let win, blocker, updater
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, pet: { out: true }, tabsEaten: 0, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -178,25 +178,43 @@ function pwOffer(t) {
 // ---- picker share screen (dipakai kalau picker sistem macOS tidak tersedia) ----
 const pendingScreens = new Map()
 let screenSeq = 0
+// pilihan: tab Almac (tanpa izin Screen Recording, bisa ikut suara tab), jendela, atau layar penuh
 async function pickScreen(request) {
   if (!win) return null
   let host = ''
   try { host = new URL(request.securityOrigin).host } catch {}
+  const asker = state.tabs.find(t => t.view && request.frame && t.view.webContents === webContentsOf(request.frame))
   const perm = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted'
-  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 200 }, fetchWindowIcons: true })
-  const own = new Set(['Almi', 'Radio'])
-  const list = sources.filter(s => !own.has(s.name))
+  // layar/jendela hanya kalau izin sudah ada (kalau belum, getSources memunculkan prompt macOS tiap meeting)
+  const sources = perm === 'granted' ? await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 200 }, fetchWindowIcons: true }) : []
+  const list = sources.filter(s => !['Almi', 'Radio'].includes(s.name))
+  const tabs = state.tabs.filter(t => t.profileId === (asker?.profileId ?? state.activeProfile) && /^https?:/.test(t.url || ''))
+  const tabThumbs = await Promise.all(tabs.map(async t => {
+    const img = t.view && await t.view.webContents.capturePage().catch(() => null)
+    return img && !img.isEmpty() ? 'data:image/jpeg;base64,' + img.resize({ width: 320 }).toJPEG(65).toString('base64') : ''
+  }))
   const id = ++screenSeq
   win.focus()
   win.webContents.send('screen-pick', {
-    id, host, permission: perm,
+    id, host, permission: perm, audio: !!request.audioRequested,
+    tabs: tabs.map((t, i) => ({ id: t.id, title: t.title || t.url, host: hostOf(t.url), favicon: t.favicon || '', thumb: tabThumbs[i], self: t === asker })),
     sources: list.map(s => ({ id: s.id, name: s.name, kind: s.id.startsWith('screen') ? 'screen' : 'window',
       thumb: s.thumbnail.isEmpty() ? '' : 'data:image/jpeg;base64,' + s.thumbnail.toJPEG(70).toString('base64'),
       icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : '' })),
   })
   const chosen = await new Promise(resolve => pendingScreens.set(id, resolve))
-  return list.find(s => s.id === chosen) || null
+  if (chosen?.tabId) { // share satu tab: frame utama tab itu = isi tab (+ suaranya kalau diminta)
+    const t = state.tabs.find(t => t.id === chosen.tabId)
+    if (!t) return null
+    if (!t.view) wake(t)
+    t.sharing = true // ponytail: tidak ditidurkan otomatis lagi selama sesi (akhir share tidak terdeteksi); tutup tab / restart untuk reset
+    const frame = t.view.webContents.mainFrame
+    return { video: frame, ...(chosen.audio && request.audioRequested ? { audio: frame } : {}) }
+  }
+  const src = list.find(s => s.id === chosen?.sourceId)
+  return src ? { video: src } : null
 }
+const webContentsOf = frame => { try { return require('electron').webContents.fromFrame(frame) } catch { return null } }
 
 // DNS-over-HTTPS berlaku untuk seluruh app (Chromium: satu resolver untuk semua sesi)
 // VPN (GlobalProtect, Tailscale, WARP, ...): interface tunnel dengan IPv4. Selama tersambung, DoH dijeda -> DNS sistem/VPN
@@ -259,6 +277,7 @@ let downloadsVersion = 0, downloadTimer
 function load() {
   try { state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) } } catch {}
   if (typeof state.pet !== 'object' || !state.pet) state.pet = { out: state.pet !== false } // dulu boolean
+  state.dl = { mode: 'auto', dir: '', lastDir: '', ...state.dl }
   if (!state.profiles.length) state.profiles.push({ id: 'p1', name: 'Personal', color: '#41a6f6' })
   if (!state.profiles.some(p => p.id === state.activeProfile)) state.activeProfile = state.profiles[0].id
   state.profiles.forEach(workspaces)
@@ -291,9 +310,17 @@ function workspaces(p) {
 const activeWs = (profileId = state.activeProfile) => profileOf(profileId).activeWs
 
 let historyTimer
+// riwayat bisa ~5 MB: ditulis paling sering tiap 10 dtk (sisanya saat keluar), bukan tiap pindah halaman
 function saveHistory() {
-  clearTimeout(historyTimer)
-  historyTimer = setTimeout(() => fs.writeFile(HISTORY_FILE, JSON.stringify(history), () => {}), 2000)
+  if (historyTimer) return
+  historyTimer = setTimeout(() => { historyTimer = null; fs.writeFile(HISTORY_FILE, JSON.stringify(history), () => {}) }, 10000)
+}
+// indeks "profil\nurl" -> entri, supaya mencatat kunjungan tidak menelusuri 20.000 entri.
+// Dibangun ulang otomatis kalau array riwayat diganti (filter/sort/slice di tempat lain).
+let histIdx = null, histIdxFor = null
+function histEntry(p, url) {
+  if (histIdxFor !== history) { histIdx = new Map(history.map(h => [h.p + '\n' + h.url, h])); histIdxFor = history }
+  return histIdx.get(p + '\n' + url)
 }
 
 function downloadsChanged() { // progres sering berubah -> simpan & render dibatasi
@@ -393,7 +420,7 @@ async function importRun({ browser, dir, bookmarks: wantBookmarks, history: want
         const ts = r.ts, h = mine.get(r.url)
         if (h) { h.ts = Math.max(h.ts, ts); h.n += r.visit_count; h.title ||= r.title; continue }
         const entry = { url: r.url, title: r.title, ts, n: r.visit_count, p: profileId }
-        history.push(entry); mine.set(r.url, entry); result.history++
+        history.push(entry); mine.set(r.url, entry); result.history++; histIdxFor = null
       }
       if (history.length > HISTORY_MAX) history = history.sort((a, b) => b.ts - a.ts).slice(0, HISTORY_MAX)
       saveHistory()
@@ -407,8 +434,8 @@ async function importRun({ browser, dir, bookmarks: wantBookmarks, history: want
 
 function addHistory(t, visit) {
   if (!/^https?:/.test(t.url) || profileOf(t.profileId)?.ephemeral) return // privat: tidak dicatat
-  let h = history.find(h => h.url === t.url && h.p === t.profileId)
-  if (!h) { h = { url: t.url, title: '', ts: 0, n: 0, p: t.profileId }; history.push(h) }
+  let h = histEntry(t.profileId, t.url)
+  if (!h) { h = { url: t.url, title: '', ts: 0, n: 0, p: t.profileId }; history.push(h); histIdx.set(h.p + '\n' + h.url, h) }
   h.title = t.title || h.title
   h.ts = Date.now()
   if (visit) h.n++
@@ -416,7 +443,7 @@ function addHistory(t, visit) {
   saveHistory()
 }
 
-let renderTimer
+let renderTimer, stateTimer = null, stateToSave = ''
 function render(now) {
   if (now === true) { clearTimeout(renderTimer); renderTimer = null; return flush() }
   if (!renderTimer) renderTimer = setTimeout(() => { renderTimer = null; flush() }, 100)
@@ -461,7 +488,7 @@ function flush() {
     canReopen: closedTabs.length > 0,
     allSleeping: !state.tabs.some(t => t.view),
     blockedToday: state.stats[dayKey()] || 0,
-    appVersion: app.getVersion(), defaultBrowser: app.isDefaultProtocolClient('https'), canSetDefault: app.isPackaged, pet: { out: !!state.pet.out }, tabsEaten: state.tabsEaten || 0, update: updater?.get() || { status: 'idle' },
+    dl: { mode: state.dl.mode, dir: state.dl.dir && fs.existsSync(state.dl.dir) ? state.dl.dir : app.getPath('downloads'), custom: !!state.dl.dir && fs.existsSync(state.dl.dir) }, /* folder yang benar-benar dipakai */ appVersion: app.getVersion(), defaultBrowser: app.isDefaultProtocolClient('https'), canSetDefault: app.isPackaged, pet: { out: !!state.pet.out }, tabsEaten: state.tabsEaten || 0, update: updater?.get() || { status: 'idle' },
     pw: { setup: vault.exists(), unlocked: vault.unlocked(), touchId: state.pwTouchId && fs.existsSync(TOUCH_FILE), canTouchId: process.platform === 'darwin' && systemPreferences.canPromptTouchID?.() && safeStorage.isEncryptionAvailable(), lockAfter: state.pwLockAfter },
   })
   const petState = JSON.stringify({ sleeping: !state.tabs.some(t => t.view), today: state.stats[dayKey()] || 0 })
@@ -472,7 +499,8 @@ function flush() {
   const profiles = state.profiles.filter(p => !p.ephemeral)
   const sitePerms = Object.fromEntries(Object.entries(state.sitePerms).filter(([id]) => !priv.has(id)))
   const activeProfile = priv.has(state.activeProfile) ? profiles[0]?.id : state.activeProfile
-  fs.writeFile(STATE_FILE, JSON.stringify({ ...state, tabs, profiles, sitePerms, activeProfile }), () => {})
+  stateToSave = JSON.stringify({ ...state, tabs, profiles, sitePerms, activeProfile })
+  stateTimer ||= setTimeout(() => { stateTimer = null; fs.writeFile(STATE_FILE, stateToSave, () => {}) }, 1000) // dikumpulkan, bukan tiap render
 }
 
 // ikon di kolom alamat: secure (https), insecure (http), neutral (internal/kosong)
@@ -521,9 +549,10 @@ function profileCtx(profileId) {
   ses.setPermissionRequestHandler((wc, permission, callback, details) => { onPermissionRequest(profileId, permission, details).then(callback) })
   // share screen (Meet, Zoom, Teams, ...): tanpa handler ini getDisplayMedia selalu ditolak Electron.
   // macOS 15+: picker bawaan sistem (handler tidak dipanggil); selain itu picker Almac.
+  // picker Almac (bukan picker sistem macOS) supaya tab Almac juga bisa dipilih
   ses.setDisplayMediaRequestHandler((request, callback) => {
-    pickScreen(request).then(src => callback(src ? { video: src } : null)).catch(e => { console.error('share screen:', e); callback(null) })
-  }, { useSystemPicker: true })
+    pickScreen(request).then(streams => callback(streams)).catch(e => { console.error('share screen:', e); callback(null) })
+  })
   ses.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
     if (PERM_DENY.has(permission)) return false
     const kinds = permKinds(permission, details.mediaType ? [details.mediaType] : [])
@@ -586,15 +615,22 @@ function profileCtx(profileId) {
   ses.extensions.on('extension-unloaded', render)
   // Ekstensi tiap profil disimpan terpisah, seperti Chrome
   // unduhan langsung ke folder Downloads (nama unik), progres ditampilkan di Library > Unduhan
+  // lokasi unduhan (Settings): auto = folder pilihan, last = folder terakhir dipakai, ask = dialog "Save as" tiap kali
   ses.on('will-download', (_, item) => {
-    const file = uniquePath(app.getPath('downloads'), item.getFilename())
-    item.setSavePath(file)
-    const d = { id: uid('d'), filename: path.basename(file), path: file, url: item.getURL(), total: item.getTotalBytes(), received: 0, state: 'progressing', ts: Date.now(), p: profileId }
+    const dl = state.dl, exists = d => d && fs.existsSync(d)
+    const home = exists(dl.dir) ? dl.dir : app.getPath('downloads')
+    const base = dl.mode === 'last' && exists(dl.lastDir) ? dl.lastDir : home
+    let file = ''
+    if (dl.mode === 'ask') item.setSaveDialogOptions({ title: 'Save file', defaultPath: path.join(exists(dl.lastDir) ? dl.lastDir : home, item.getFilename()) })
+    else { file = uniquePath(base, item.getFilename()); item.setSavePath(file) }
+    const d = { id: uid('d'), filename: path.basename(file || item.getFilename()), path: file, url: item.getURL(), total: item.getTotalBytes(), received: 0, state: 'progressing', ts: Date.now(), p: profileId }
+    // dialog "Save as": path baru diketahui setelah user memilih -> ingat foldernya sebagai folder terakhir
+    const learn = () => { const p = item.getSavePath(); if (p && p !== d.path) { d.path = p; d.filename = path.basename(p); dl.lastDir = path.dirname(p) } }
     downloads.push(d)
     liveDownloads.set(d.id, item)
     win?.webContents.send('download-started', d.filename)
-    item.on('updated', (_, st) => { d.received = item.getReceivedBytes(); d.total = item.getTotalBytes(); d.state = st === 'interrupted' ? 'interrupted' : item.isPaused() ? 'paused' : 'progressing'; downloadsChanged() })
-    item.once('done', (_, st) => { d.received = item.getReceivedBytes(); d.state = st; liveDownloads.delete(d.id); downloadsChanged() })
+    item.on('updated', (_, st) => { learn(); d.received = item.getReceivedBytes(); d.total = item.getTotalBytes(); d.state = st === 'interrupted' ? 'interrupted' : item.isPaused() ? 'paused' : 'progressing'; downloadsChanged() })
+    item.once('done', (_, st) => { learn(); d.received = item.getReceivedBytes(); d.state = st; liveDownloads.delete(d.id); downloadsChanged() })
     downloadsChanged()
   })
   if (!profileOf(profileId)?.ephemeral) // privat: tanpa ekstensi (seperti incognito Chrome)
@@ -872,6 +908,8 @@ const commands = {
     if (key === 'cookiePolicy' && ['allow', 'block_third_party', 'block_all'].includes(value)) state.cookiePolicy = value
     if (key === 'doNotTrack') state.doNotTrack = !!value
     if (key === 'httpsOnly') state.httpsOnly = !!value
+    if (key === 'dlMode' && ['auto', 'last', 'ask'].includes(value)) state.dl.mode = value
+    if (key === 'dlDirReset') state.dl.dir = ''
     if (key === 'pwLockAfter' && [1, 5, 15, 60].includes(value)) state.pwLockAfter = value
     if (key === 'stripTracking') state.stripTracking = !!value
     if (key === 'privateWipeAfter' && [0, 15, 30, 60].includes(value)) state.privateWipeAfter = value
@@ -1159,7 +1197,8 @@ const commands = {
     vault.save(); pwTouch()
   },
   pwLock,
-  screenPick: ({ id, sourceId }) => { const r = pendingScreens.get(id); pendingScreens.delete(id); r?.(sourceId || null) },
+  screenPick: ({ id, sourceId, tabId, audio }) => { const r = pendingScreens.get(id); pendingScreens.delete(id); r?.(sourceId || tabId ? { sourceId, tabId, audio: !!audio } : null) },
+  screenAccess: () => desktopCapturer.getSources({ types: ['screen'] }).catch(() => {}), // memunculkan prompt izin macOS
   openScreenSettings: () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'),
   // tombol "Fill" di pengelola / ⌘⇧L: kirim ke halaman aktif, hanya kalau login itu memang untuk situs tersebut
   pwFillActive: id => {
@@ -1179,6 +1218,10 @@ const commands = {
   petFeedEnd: () => { petWin?.webContents.send('pet-hungry', false); petFeedTimer = setTimeout(() => { petFeedTab = null }, 1500) },
   // jadikan browser default: macOS menampilkan konfirmasi "Use Almac Browser as your default web browser?"
   setDefaultBrowser: () => { app.setAsDefaultProtocolClient('http'); app.setAsDefaultProtocolClient('https'); setTimeout(() => render(true), 1500) },
+  dlChooseDir: async () => { // folder unduhan tetap
+    const r = await dialog.showOpenDialog(win, { title: 'Download folder', defaultPath: state.dl.dir || app.getPath('downloads'), properties: ['openDirectory', 'createDirectory'] })
+    if (!r.canceled && r.filePaths[0]) { state.dl.dir = r.filePaths[0]; render(true); win?.webContents.send('toast', 'Downloads now save to ' + r.filePaths[0].replace(app.getPath('home'), '~')) }
+  },
   updateCheck: () => updater.check({ manual: true }),
   updateDownload: async () => { await updater.download(); updater.install() }, // tombol "Update & Restart"
   updateInstall: () => updater.install(),
@@ -1484,6 +1527,7 @@ ipcMain.handle('pw', (e, type, arg) => {
   }
   if (type === 'unlock') { if (t === activeTab()) { win?.focus(); win?.webContents.send('pw-unlock') } return null }
   if (type === 'generate') return passwords.generate()
+  if (type === 'gone') { if (t.pendingPw) setTimeout(() => pwOffer(t), 300); return null } // kolom password hilang = login berhasil
   if (type === 'capture') {
     // username kosong (form password saja): pakai email dari langkah sebelumnya di situs yang sama
     const prev = t.pwLastUser?.origin === origin && Date.now() - t.pwLastUser.ts < 600000 ? t.pwLastUser.username : ''
@@ -1830,7 +1874,7 @@ app.whenReady().then(async () => {
     const now = Date.now()
     for (const t of state.tabs) {
       // hemat memori: tab tidak aktif (tidak tampil, tidak bersuara) ditidurkan setelah state.sleepAfter menit
-      if (state.sleepAfter && t.view && !isShown(t) && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !t.view.webContents.isCurrentlyAudible() && t !== musicTab) sleep(t)
+      if (state.sleepAfter && t.view && !isShown(t) && !t.sharing && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !t.view.webContents.isCurrentlyAudible() && t !== musicTab) sleep(t)
     }
     if (vault.unlocked() && now - pwLastUse > state.pwLockAfter * 60000) pwLock()
     if (state.focus.until && !focusOn()) { state.focus.until = 0; win.webContents.send('toast', 'Focus session finished. Nice work!') }
@@ -1854,7 +1898,8 @@ app.on('certificate-error', (event, wc, url, error, certificate, callback, isMai
 app.on('window-all-closed', () => app.quit())
 // simpan history yang belum ditulis (debounce 2 detik) sebelum keluar
 app.on('before-quit', () => {
-  clearTimeout(historyTimer); fs.writeFileSync(HISTORY_FILE, JSON.stringify(history))
+  if (stateToSave) { clearTimeout(stateTimer); fs.writeFileSync(STATE_FILE, stateToSave) }
+  clearTimeout(historyTimer); historyTimer = null; fs.writeFileSync(HISTORY_FILE, JSON.stringify(history))
   clearTimeout(bookmarkTimer); fs.writeFileSync(BOOKMARKS_FILE, JSON.stringify(bookmarks))
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
   fs.writeFileSync(DOWNLOADS_FILE, JSON.stringify(downloads.slice(-200).filter(d => !priv.has(d.p))))

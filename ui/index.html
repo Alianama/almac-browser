@@ -8,7 +8,7 @@
 </head>
 <body>
   <aside id="sidebar">
-    <header class="top"><div class="logo pixel"><img src="logo.svg" alt=""><span>ALMAC</span></div><span id="privBadge" class="priv-badge pixel" hidden>PRIVATE</span><span id="focusBadge" class="focus-badge pixel" hidden></span><div class="chip top-chip" id="shield" title="Ads & trackers blocked in this tab — click for weekly stats"><span data-icon="shield"></span><b id="blocked">0</b></div></header>
+    <header class="top"><div class="logo pixel"><img src="logo.svg" alt=""><span>ALMAC</span></div><span id="privBadge" class="priv-badge pixel" hidden>PRIVATE</span><span id="focusBadge" class="focus-badge pixel" hidden></span></header>
 
     <div class="nav">
       <button data-cmd="back" title="Back (⌘[)" data-icon="back"></button>
@@ -733,37 +733,41 @@ almac.onPermRequest(({ id, host, kinds }) => {
 })
 
 // ---- share screen: pilih layar / jendela (picker sistem macOS dipakai kalau tersedia) ----
-almac.onScreenPick(({ id, host, permission, sources }) => {
+almac.onScreenPick(async ({ id, host, permission, sources, tabs, audio }) => {
   let chosen = null, answered = false
-  const answer = sourceId => { answered = true; almac.cmd('screenPick', { id, sourceId }) }
-  const share = el('button', { type: 'button', className: 'primary', textContent: 'Share', disabled: true, onclick: () => { answer(chosen); closeModal() } })
+  const audioBox = el('input', { type: 'checkbox', checked: true })
+  const audioRow = el('label', { className: 'check', hidden: true }, audioBox, el('span', { textContent: 'Share tab audio' }))
+  const answer = c => { answered = true; almac.cmd('screenPick', { id, ...(c || {}) }) }
+  const pick = () => { if (chosen) { answer(chosen.tabId ? { tabId: chosen.tabId, audio: audioBox.checked } : { sourceId: chosen.sourceId }); closeModal() } }
   const grid = el('div', { className: 'screen-grid' })
+  const card = (key, thumb, label, icon, onSelect) => el('button', { type: 'button', className: 'screen-card', title: label,
+    onclick() { onSelect(); grid.querySelectorAll('.screen-card').forEach(c => c.classList.toggle('on', c === this)) },
+    ondblclick() { onSelect(); pick() } },
+    thumb ? el('img', { src: thumb, alt: '' }) : el('div', { className: 'screen-blank' }, icon ? el('img', { className: 'screen-fav', src: icon, alt: '' }) : ''),
+    el('span', {}, ...(icon ? [el('img', { className: 'screen-ico', src: icon, alt: '' })] : []), document.createTextNode(label)))
   const show = kind => {
-    tabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.kind === kind))
-    grid.replaceChildren(...sources.filter(s => s.kind === kind).map(s => {
-      const card = el('button', { type: 'button', className: 'screen-card', title: s.name,
-        onclick() { chosen = s.id; share.disabled = false; grid.querySelectorAll('.screen-card').forEach(c => c.classList.toggle('on', c === this)) },
-        ondblclick() { answer(s.id); closeModal() } },
-        s.thumb ? el('img', { src: s.thumb, alt: '' }) : el('div', { className: 'screen-blank' }),
-        el('span', {}, ...(s.icon ? [el('img', { className: 'screen-ico', src: s.icon, alt: '' })] : []), document.createTextNode(s.name)))
-      return card
-    }))
+    chosen = null
+    tabsBar.querySelectorAll('button').forEach(b => { b.classList.toggle('on', b.dataset.kind === kind); b.classList.toggle('ask', b.dataset.kind === kind) })
+    audioRow.hidden = !(kind === 'tab' && audio)
+    if (kind === 'tab') {
+      const list = [...tabs.filter(t => !t.self), ...tabs.filter(t => t.self)] // tab meeting sendiri paling akhir
+      grid.replaceChildren(...list.map(t => card('t' + t.id, t.thumb, (t.self ? '(this tab) ' : '') + t.title, t.favicon, () => { chosen = { tabId: t.id } })))
+    } else if (permission !== 'granted') {
+      grid.replaceChildren(el('div', { className: 'site-card bad' }, iconEl('warn'), el('div', { className: 'meta' },
+        el('b', { textContent: 'Screen Recording permission needed' }),
+        el('small', { textContent: 'To share a window or your screen, allow Almac Browser in System Settings › Privacy & Security › Screen & System Audio Recording, then reopen Almac. Sharing a tab works without it.' })),
+        el('div', { className: 'inline' }, el('button', { type: 'button', onclick: () => almac.cmd('screenAccess') }, 'Ask permission'), el('button', { type: 'button', onclick: () => almac.cmd('openScreenSettings') }, 'Open Settings'))))
+    } else grid.replaceChildren(...sources.filter(s => s.kind === kind).map(s => card(s.id, s.thumb, s.name, s.icon, () => { chosen = { sourceId: s.id } })))
     if (!grid.children.length) grid.append(el('p', { className: 'none', textContent: 'Nothing to share here.' }))
   }
-  const tabs = el('div', { className: 'seg' }, ...[['screen', 'Entire screen'], ['window', 'Window']].map(([k, t]) => {
+  const tabsBar = el('div', { className: 'seg' }, ...[['tab', 'Almac tab'], ['window', 'Window'], ['screen', 'Entire screen']].map(([k, t]) => {
     const b = el('button', { type: 'button', textContent: t, onclick: () => show(k) }); b.dataset.kind = k; return b
   }))
-  const noPerm = permission !== 'granted'
-  openModal('Share your screen', [
-    el('p', { className: 'modal-text' }, el('b', { textContent: host || 'This site' }), ' wants to see your screen.'),
-    ...(noPerm ? [el('div', { className: 'site-card bad' }, iconEl('warn'), el('div', { className: 'meta' },
-      el('b', { textContent: 'Screen Recording permission needed' }),
-      el('small', { textContent: 'Allow Almac Browser in System Settings › Privacy & Security › Screen & System Audio Recording, then reopen Almac.' })),
-      el('button', { type: 'button', onclick: () => almac.cmd('openScreenSettings') }, 'Open Settings'))] : []),
-    tabs, grid,
-  ], [{ label: 'Cancel' }], () => { if (!answered) answer(null) })
-  $('#overlay .modal .actions').append(share)
-  show('screen')
+  await openModal('Share your screen', [ // tunggu modal selesai dibuat sebelum menambah tombol Share
+    el('p', { className: 'modal-text' }, el('b', { textContent: host || 'This site' }), ' wants to see your screen. Pick a tab, a window, or your whole screen.'),
+    tabsBar, grid, audioRow,
+  ], [{ label: 'Cancel' }, { label: 'Share', primary: true, onClick: () => { pick(); return false } }], () => { if (!answered) answer(null) })
+  show(tabs.length ? 'tab' : 'screen')
 })
 
 // ---- sidebar: sembunyikan/tampilkan, muncul otomatis dari tepi kiri, ubah lebar ----
@@ -1078,8 +1082,6 @@ almac.onState(s => {
   document.documentElement.style.setProperty('--accent', s.accent || profile.color)
   $('#actions').setAttribute('partition', 'persist:' + profile.id)
   if (document.activeElement !== url) url.value = s.url
-  $('#blocked').textContent = s.adblock ? s.blocked : 'OFF'
-  $('#shield').classList.toggle('off', !s.adblock)
   if ($('#themeBtn').dataset.theme !== s.theme) { $('#themeBtn').dataset.theme = s.theme; $('#themeBtn').replaceChildren(iconEl(s.theme)) }
   document.body.classList.toggle('split', !!s.split)
   if (s.split) {
@@ -1323,6 +1325,17 @@ function openSettings(initialTab = 'general') {
       el('div', { className: 'row' }, el('span', { textContent: 'New tab opens' }), ntp),
       el('div', { className: 'row' }, el('span', { textContent: 'Memory saver: sleep tabs after' }), sleepSeg),
       el('label', { className: 'check' }, bar, el('span', { textContent: 'Show bookmark bar (⌘⇧B)' })),
+      (() => { // unduhan: seperti Chrome
+        const seg = el('div', { className: 'seg' }, ...[['auto', 'Save to folder'], ['last', 'Last used folder'], ['ask', 'Ask every time']].map(([v, t]) => el('button', {
+          type: 'button', className: v === s.dl.mode ? 'on ask' : '', textContent: t,
+          onclick() { almac.cmd('setting', { key: 'dlMode', value: v }); seg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
+        })))
+        return el('div', { className: 'row' }, el('span', { textContent: 'Downloads' }), seg,
+          el('div', { className: 'inline dl-dir' }, iconEl('folder'), el('code', { textContent: s.dl.dir.replace(/^\/Users\/[^/]+/, '~'), title: s.dl.dir }),
+            el('button', { type: 'button', onclick: () => { closeModal(); almac.cmd('dlChooseDir') } }, 'Change…'),
+            ...(s.dl.custom ? [el('button', { type: 'button', onclick() { almac.cmd('setting', { key: 'dlDirReset' }); this.remove() } }, 'Use Downloads')] : [])),
+          el('p', { className: 'modal-text', style: 'font-size:11px', textContent: 'Save to folder: files go straight to the folder above. Last used folder: straight to the folder you picked last time. Ask every time: choose the location for each download.' }))
+      })(),
       el('label', { className: 'check' }, petCheck, el('span', { textContent: 'Almi is out of her house (drag her anywhere, drop tabs on her to close them)' })),
       el('div', { className: 'row' }, el('span', { textContent: 'Default browser' }),
         s.defaultBrowser ? el('p', { className: 'modal-text', textContent: '✓ Almac is your default browser. Links from other apps open here.' })
@@ -1660,7 +1673,6 @@ async function openStats() {
   ], [{ label: 'Nice', primary: true }])
 }
 almac.onOpenStats(openStats)
-$('#shield').addEventListener('click', openStats)
 
 // ---- Almac Passwords ----
 // brankas terenkripsi (AES-256-GCM, master password) seperti Almac Remote; UI tidak pernah menyimpan password,

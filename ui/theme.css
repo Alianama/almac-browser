@@ -645,7 +645,6 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 
 /* pet pixel (Almi), badge fokus, command palette, statistik */
 .focus-badge { margin-left: 6px; padding: 2px 5px; font-size: 9px; color: #111; background: #ffcd75; border: var(--bw) solid var(--border); border-radius: 5px; box-shadow: 2px 2px 0 var(--shadow); cursor: pointer; -webkit-app-region: no-drag; }
-#shield { cursor: pointer; }
 .palette-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .palette-list .sug small { margin-left: auto; }
 .focus-sites { height: auto; min-height: 120px; padding: 8px; resize: vertical; font-family: var(--font-ui); }
@@ -674,9 +673,7 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 .modal-text.muted { font-size: 11px; color: var(--muted); }
 .stats-hero canvas { flex: none; }
 
-/* counter blokir iklan di header (kanan atas), tombol status rata */
-.top-chip { flex: none; margin-left: auto; height: 24px; padding: 0 7px; font-size: 12px; -webkit-app-region: no-drag; cursor: pointer; box-shadow: 2px 2px 0 var(--shadow); }
-.top-chip .wsi { font-size: 14px; }
+/* tombol status rata */
 .status { justify-content: space-between; }
 
 .pw-site { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; border-bottom: var(--bw) dashed var(--border); }
@@ -685,7 +682,7 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 /* picker share screen */
 .screen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; max-height: 46vh; overflow-y: auto; padding: 2px; }
 .screen-card { display: flex; flex-direction: column; gap: 6px; height: auto; padding: 6px; text-align: left; }
-.screen-card img:first-child, .screen-blank { width: 100%; aspect-ratio: 16 / 10; object-fit: contain; background: #111; border-radius: 6px; }
+.screen-card > img, .screen-card > .screen-blank { width: 100%; aspect-ratio: 16 / 10; object-fit: contain; background: #111; border-radius: 6px; }
 .screen-card span { display: flex; align-items: center; gap: 5px; font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .screen-ico { width: 14px; height: 14px; flex: none; }
 .screen-card.on { background: var(--active); box-shadow: inset 0 0 0 2px var(--accent), 2px 2px 0 var(--shadow); }
@@ -706,3 +703,8 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 .err-page code { font-size: 11px; color: var(--muted); opacity: .8; }
 .err-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
 .err-actions button { height: 34px; padding: 0 16px; }
+.screen-blank { display: grid; place-items: center; }
+.screen-fav { width: 32px; height: 32px; }
+
+.dl-dir { align-items: center; }
+.dl-dir code { font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

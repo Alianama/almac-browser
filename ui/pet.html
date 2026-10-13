@@ -30,7 +30,7 @@ const BASE = { w: 112, h: 112 }, SIZE = 96, SPEED = { walk: 30, run: 95 }
 let area = { w: 800, h: 600, floor: 590, ledges: [{ x1: 0, x2: 800, y: 590 }] }
 const p = { cx: 400, by: 590, dir: 1, mode: 'idle', until: 0, target: 0, t: 0, frame: 0, fps: 2, anim: 'idle', once: false, lift: 0, vx: 0, vy: 0 }
 let today = 0, sleeping = false, hungry = false, near = false, hover = false
-let blinkUntil = 0, squashT = -1, held = null, dragVx = 0, lastEat = -1e9, lastPet = -1e9, sentPos = ''
+let lastDraw = '', blinkUntil = 0, squashT = -1, held = null, dragVx = 0, lastEat = -1e9, lastPet = -1e9, sentPos = ''
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d')
 const rnd = (a, b) => a + Math.random() * (b - a)
 const onFloor = () => p.by >= area.floor - 2
@@ -103,7 +103,9 @@ function tick(now) {
   p.frame += dt * p.fps
   draw(now)
   sendPos()
-  requestAnimationFrame(tick)
+  // hemat CPU: 60 fps hanya saat jatuh/melompat; normal 30 fps; tidur 10 fps
+  if (p.mode === 'fall' || p.mode === 'enter' || squashT > 0) requestAnimationFrame(tick)
+  else setTimeout(() => requestAnimationFrame(tick), p.mode === 'sleep' ? 100 : 33)
 }
 
 function frameOf(now) {
@@ -126,6 +128,11 @@ function draw(now) {
     const k = (now - squashT) / 320
     if (k < 1) { const s = Math.sin(k * Math.PI) * (1 - k); sx *= 1 + s * 0.35; sy *= 1 - s * 0.3 } else squashT = -1
   }
+  // hemat CPU: kanvas hanya digambar ulang kalau frame/posisi/transform berubah (bukan 60x per detik terus-menerus)
+  const flipKey = p.dir < 0 && ['walk', 'run', 'jump', 'look'].includes(anim)
+  const key = [idx, flipKey, sx.toFixed(3), sy.toFixed(3), dy.toFixed(1), rot.toFixed(3), p.lift.toFixed(1)].join()
+  if (key === lastDraw) return
+  lastDraw = key
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.imageSmoothingEnabled = false
   ctx.clearRect(0, 0, cv.width, cv.height)
@@ -140,13 +147,17 @@ function draw(now) {
 }
 
 // ---- jendela mengikuti posisi ----
+// jendela Almi dipindah per 2px (= 1 pixel sprite) saat berjalan: memindah jendela transparan 60x/detik
+// membuat main + GPU sibuk (~20% CPU). Saat jatuh tetap tiap frame supaya mulus.
+let sentX = null, sentY = null
 function sendPos(save) {
   if (held) return // saat diseret, main yang memegang posisi
   clampPos()
-  const key = Math.round(p.cx) + ',' + Math.round(p.by)
-  if (key === sentPos && !save) return
-  sentPos = key
-  pet.pos({ cx: Math.round(p.cx), by: Math.round(p.by), save: !!save })
+  const x = Math.round(p.cx), y = Math.round(p.by)
+  const step = p.mode === 'fall' || p.mode === 'enter' ? 1 : 2
+  if (!save && sentX !== null && Math.abs(x - sentX) < step && Math.abs(y - sentY) < 1) return
+  sentX = x; sentY = y
+  pet.pos({ cx: x, by: y, save: !!save })
 }
 let bubbleTimer
 function say(text, ms = 2400) {
