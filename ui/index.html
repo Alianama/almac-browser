@@ -8,7 +8,7 @@
 </head>
 <body>
   <aside id="sidebar">
-    <header class="top"><div class="logo pixel"><img src="logo.svg" alt=""><span>ALMAC</span></div><span id="privBadge" class="priv-badge pixel" hidden>PRIVATE</span><span id="focusBadge" class="focus-badge pixel" hidden></span><button type="button" id="pet" class="pet" title="Almi — click for your weekly stats"></button></header>
+    <header class="top"><div class="logo pixel"><img src="logo.svg" alt=""><span>ALMAC</span></div><span id="privBadge" class="priv-badge pixel" hidden>PRIVATE</span><span id="focusBadge" class="focus-badge pixel" hidden></span><div class="chip top-chip" id="shield" title="Ads & trackers blocked in this tab — click for weekly stats"><span data-icon="shield"></span><b id="blocked">0</b></div></header>
 
     <div class="nav">
       <button data-cmd="back" title="Back (⌘[)" data-icon="back"></button>
@@ -53,10 +53,10 @@
     <footer class="bottom glass">
       <div class="profiles-row"><div id="profiles"></div><button id="settingsBtn" class="mini" type="button" title="Settings (⌘,)" data-icon="gear"></button></div>
       <div class="status">
-        <div class="chip" id="shield" title="Ads & trackers blocked in this tab — click for weekly stats"><span data-icon="shield"></span><b id="blocked">0</b></div>
         <button id="pwBtn" title="Almac Passwords (⌘⇧P)" data-icon="key"></button>
         <button id="historyBtn" title="History & Bookmarks (⌘Y)" data-icon="clock"></button>
-        <button data-cmd="music" id="musicBtn" title="Radio widget (⌘⇧M)" data-icon="radio"></button>
+        <button id="catBtn" title="Almi's house: let her out or call her home"></button>
+        <button data-cmd="music" id="musicBtn" title="Music player (⌘⇧M)" data-icon="headphones"></button>
         <button data-cmd="theme" id="themeBtn" title="Theme"></button>
       </div>
     </footer>
@@ -97,6 +97,7 @@
   </div>
 
 <script src="icons.js"></script>
+<script src="almi.js"></script>
 <script>
 // semua ikon UI memakai ikon animasi Lucide (ui/icons.js); nama lokal -> nama ikon
 const ICON_SET = window.ALMAC_ICONS || {}
@@ -1062,6 +1063,11 @@ almac.onState(s => {
   $('#themeBtn').title = THEME_LABEL[s.theme] + ' (click to change)'
   $('#count').textContent = s.tabs.length
   renderPet(s)
+  requestAnimationFrame(sendLedges)
+  renderUpdate(s.update)
+  const catAnim = s.pet.out ? 'idle' : 'sleep'
+  if ($('#catBtn').dataset.anim !== catAnim) { $('#catBtn').dataset.anim = catAnim; $('#catBtn').replaceChildren(almiCanvas(catAnim, 24, 2)) }
+  $('#catBtn').classList.toggle('home', !s.pet.out)
   // halaman awal: tidak ada tab, atau tab aktif masih kosong (tab baru)
   const showStart = !s.url
   $('#empty').hidden = !showStart
@@ -1165,6 +1171,10 @@ function renderTabs(tabs) {
       : el('i'))
     const x = el('button', { className: 'x', title: 'Close (⌘W)', onclick: e => { e.stopPropagation(); almac.cmd('close', t.id) } }, iconEl('x'))
     return el('div', {
+      draggable: true,
+      // seret tab ke Almi untuk menutupnya (dia memakannya)
+      ondragstart: e => { e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; almac.cmd('petFeed', t.id) },
+      ondragend: () => almac.cmd('petFeedEnd'),
       className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (seen.has(t.id) ? '' : ' new'),
       title: t.sleeping ? t.url + '\n(sleeping, saving RAM)' : t.url,
       onclick: () => almac.cmd('select', t.id),
@@ -1244,11 +1254,15 @@ function openSettings(initialTab = 'general') {
       onclick() { almac.cmd('setting', { key: 'sleepAfter', value: v }); sleepSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
     })))
     const bar = el('input', { type: 'checkbox', checked: s.bookmarkBar, onchange: () => almac.cmd('setting', { key: 'bookmarkBar', value: bar.checked }) })
+    const petCheck = el('input', { type: 'checkbox', checked: s.pet.out, onchange: () => almac.cmd('petOut', petCheck.checked) })
     return [
       el('div', { className: 'row' }, el('span', { textContent: 'Search engine' }), engines),
       el('div', { className: 'row' }, el('span', { textContent: 'New tab opens' }), ntp),
       el('div', { className: 'row' }, el('span', { textContent: 'Memory saver: sleep tabs after' }), sleepSeg),
       el('label', { className: 'check' }, bar, el('span', { textContent: 'Show bookmark bar (⌘⇧B)' })),
+      el('label', { className: 'check' }, petCheck, el('span', { textContent: 'Almi is out of her house (drag her anywhere, drop tabs on her to close them)' })),
+      el('div', { className: 'row' }, el('span', { textContent: 'Almac Browser v' + s.appVersion }),
+        el('button', { type: 'button', onclick: () => { closeModal(); almac.cmd('updateCheck'); setTimeout(openUpdate, 80) } }, iconEl('retry'), 'Check for updates')),
     ]
   }
 
@@ -1502,6 +1516,7 @@ const PALETTE_CMDS = [
   ['Start focus (25 min)', 'target', () => almac.cmd('focusStart', 25)],
   ['Stop focus', 'cancel', () => almac.cmd('focusStop')],
   ['Weekly stats', 'chart-line', () => setTimeout(openStats, 80)],
+  ["Almi's house", 'cat', () => setTimeout(openHouse, 80)],
   ['Settings', 'gear', () => setTimeout(openSettings, 80), '⌘,'],
   ['History', 'clock', () => { libTab = 'history'; showPanel('history') }, '⌘Y'],
   ['Bookmarks', 'star', () => { libTab = 'bookmarks'; showPanel('history') }, '⌘⌥B'],
@@ -1512,6 +1527,7 @@ const PALETTE_CMDS = [
   ['Radio widget', 'radio', () => almac.cmd('music'), '⌘⇧M'],
   ['Passwords', 'key', () => setTimeout(openPasswords, 80), '⌘⇧P'],
   ['Lock passwords', 'lock', () => almac.cmd('pwLock')],
+  ['Check for updates', 'retry', () => { almac.cmd('updateCheck'); setTimeout(openUpdate, 80) }],
   ['Find password in Keychain', 'external', () => almac.cmd('passwords')],
   ['Import from Chrome/Brave', 'download', () => setTimeout(openImport, 80)],
   ['Chrome Web Store', 'ext', () => almac.cmd('webStore')],
@@ -1555,22 +1571,8 @@ async function openPalette() {
 }
 almac.onOpenPalette(openPalette)
 
-// ---- Almi, pet pixel: tidur kalau semua tab tidur, makan iklan yang diblokir ----
-// sprite 12x10, '#' = badan, 'e' = mata, 'z' = mata tertutup
-const PET = {
-  idle: ['..#......#..', '.###....###.', '.##########.', '############', '###e####e###', '############', '#####..#####', '.##########.', '..##....##..', '..##....##..'],
-  sleep: ['..#......#..', '.###....###.', '.##########.', '############', '###zz##zz###', '############', '############', '.##########.', '..##....##..', '..##....##..'],
-}
-const petSvg = rows => `<svg viewBox="0 0 12 10" shape-rendering="crispEdges">${rows.flatMap((r, y) => [...r].map((c, x) =>
-  c === '.' ? '' : `<rect x="${x}" y="${y}" width="1" height="1" fill="${c === '#' ? 'var(--accent)' : 'var(--border)'}"/>`)).join('')}</svg>`
-let petMood, petBlocked = 0
+// ---- badge mode fokus (Almi sendiri ada di jendela pet: ui/pet.html) ----
 function renderPet(s) {
-  const pet = $('#pet')
-  const mood = s.allSleeping ? 'sleep' : 'idle'
-  if (mood !== petMood) { petMood = mood; pet.innerHTML = petSvg(PET[mood]); pet.dataset.mood = mood }
-  if (s.blockedToday > petBlocked && petBlocked) { pet.classList.remove('eat'); void pet.offsetWidth; pet.classList.add('eat') }
-  petBlocked = s.blockedToday
-  pet.title = `Almi — ${s.blockedToday} trackers eaten today${s.allSleeping ? ' (all tabs asleep, zzz)' : ''}. Click for weekly stats`
   const left = s.focusUntil ? Math.ceil((s.focusUntil - Date.now()) / 60000) : 0
   $('#focusBadge').hidden = !left
   $('#focusBadge').textContent = left + 'm'
@@ -1583,14 +1585,14 @@ async function openStats() {
   const days = await almac.ask('stats')
   const total = days.reduce((a, d) => a + d.n, 0), max = Math.max(1, ...days.map(d => d.n))
   openModal('This week', [
-    el('div', { className: 'stats-hero' }, el('div', { className: 'pet big', innerHTML: petSvg(PET.idle) }),
+    el('div', { className: 'stats-hero' }, almiCanvas(total > 100 ? 'happy' : 'wave', 96, 4),
       el('p', { className: 'modal-text' }, el('b', { textContent: total.toLocaleString('en-US') }), ` ads & trackers blocked in the last 7 days. Almi is ${total > 1000 ? 'very full' : total > 100 ? 'well fed' : 'still hungry'}.`)),
     el('div', { className: 'stats-bars' }, ...days.map(d => el('div', { className: 'bar', title: `${d.day}: ${d.n}` },
       el('i', { style: `height:${Math.round(d.n / max * 100)}%` }),
       el('small', { textContent: new Date(d.day + 'T00:00').toLocaleDateString('en-US', { weekday: 'short' }) })))),
   ], [{ label: 'Nice', primary: true }])
 }
-$('#pet').addEventListener('click', openStats)
+almac.onOpenStats(openStats)
 $('#shield').addEventListener('click', openStats)
 
 // ---- Almac Passwords ----
@@ -1660,7 +1662,14 @@ async function openPasswords(q = '') {
     el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(exportPasswords, 80) } }, iconEl('file'), 'Export CSV'),
     el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(passwordSettings, 80) } }, iconEl('gear'), 'Settings'),
     el('button', { type: 'button', onclick: () => { almac.cmd('pwLock'); closeModal() } }, iconEl('lock'), 'Lock'))
-  await openModal('Passwords', [search, tools, list], [{ label: 'Done', primary: true }])
+  // login untuk situs yang sedang dibuka: isi langsung ke halaman (seperti Bitwarden)
+  const site = await almac.ask('pwSite')
+  const siteBox = site.logins.length ? el('div', { className: 'pw-site' },
+    el('div', { className: 'day', textContent: 'This site · ' + site.host }),
+    ...site.logins.map(e => el('div', { className: 'hrow pw-row' },
+      iconEl('user'), el('div', { className: 'meta' }, el('b', { textContent: e.username || '(no username)' }), el('small', { textContent: e.host })),
+      el('button', { type: 'button', className: 'primary', onclick: () => { closeModal(); setTimeout(() => almac.cmd('pwFillActive', e.id), 120) } }, 'Fill')))) : ''
+  await openModal('Passwords', [siteBox, search, tools, list], [{ label: 'Done', primary: true }])
   search.focus()
   draw()
 }
@@ -1744,6 +1753,107 @@ almac.onPwSave(async ({ id, host, username, update }) => {
 almac.onPwUnlock(() => pwUnlockModal())
 almac.onOpenPasswords(() => openPasswords())
 $('#pwBtn').addEventListener('click', () => openPasswords())
+
+// ---- update dari dalam app (updater.js): manifest bertanda tangan Ed25519 + SHA-512 ----
+let updateShown = false, notifiedVersion = ''
+const UPD_TEXT = {
+  checking: 'Checking for updates…', latest: 'You are on the latest version.',
+  downloading: 'Downloading update…', ready: 'Installing, Almac will restart…',
+}
+function updateBody(u) {
+  if (u.status === 'available') return [
+    el('p', { className: 'modal-text' }, 'Almac Browser ', el('b', { textContent: 'v' + u.version }), ` is available (you have v${lastState.appVersion}). Your tabs, passwords, and settings are kept.`),
+    ...(u.notes ? [el('pre', { className: 'upd-notes', textContent: u.notes })] : []),
+  ]
+  if (u.status === 'error') return [el('p', { className: 'modal-text error', textContent: u.error })]
+  return [
+    el('p', { className: 'modal-text', textContent: UPD_TEXT[u.status] || 'No update check yet.' }),
+    ...(u.status === 'downloading' || u.status === 'ready' ? [el('div', { className: 'dl-bar upd-bar' }, el('i', { id: 'updBar', style: `width:${Math.round(u.progress * 100)}%` }))] : []),
+  ]
+}
+function openUpdate() {
+  const u = lastState.update
+  updateShown = true
+  openModal('Software update', updateBody(u), u.status === 'available'
+    ? [{ label: 'Later' }, { label: 'Update & Restart', primary: true, onClick: () => { almac.cmd('updateDownload'); return false } }]
+    : [{ label: 'Close', primary: true }], () => { updateShown = false })
+}
+let lastUpdKey = ''
+function renderUpdate(u) {
+  if (!u) return
+  const key = u.status + u.version + u.error
+  if (key !== lastUpdKey) {
+    lastUpdKey = key
+    if (updateShown && modalOpen) {
+      // isi modal ikut status (cek -> tersedia -> unduh -> pasang) tanpa membuka ulang
+      const m = $('#overlay .modal')
+      m.querySelectorAll(':scope > :not(h2, .actions)').forEach(e => e.remove())
+      m.querySelector('h2').after(...updateBody(u))
+      if (u.status !== 'available') m.querySelector('.actions').replaceChildren(el('button', { type: 'button', className: 'primary', textContent: 'Close', onclick: closeModal, disabled: u.status === 'downloading' || u.status === 'ready' }))
+    } else if (u.status === 'available' && notifiedVersion !== u.version) {
+      notifiedVersion = u.version
+      toast(`Almac v${u.version} is available. Click to update`, 'download', openUpdate)
+    }
+  }
+  const bar = $('#updBar')
+  if (bar) bar.style.width = Math.round(u.progress * 100) + '%'
+}
+almac.onOpenUpdate(openUpdate)
+
+// tepi atas kartu sidebar = tempat Almi bisa bertengger (main menggabungkan dengan lantai & tepi atas halaman)
+let ledgeKey = ''
+function sendLedges() {
+  const list = ['.nav', '.search', '#tabsPanel', '#extPanel', '#historyPanel', 'footer.bottom']
+    .map(sel => $(sel)).filter(e => e && !e.hidden && e.offsetParent)
+    .map(e => e.getBoundingClientRect()).filter(r => r.width > 30 && r.right > 0)
+    .map(r => ({ x1: r.left, x2: r.right, y: r.top }))
+  const key = JSON.stringify(list)
+  if (key !== ledgeKey) { ledgeKey = key; almac.cmd('petLedges', list) }
+}
+addEventListener('resize', sendLedges)
+new ResizeObserver(sendLedges).observe($('#sidebar'))
+
+
+// ---- rumah Almi: keluar / pulang ----
+// rumah pixel digambar di kanvas; Almi tidur di pintu kalau sedang di rumah
+function drawHouse(ctx, t, home) {
+  const P = 4, px = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(x * P, y * P, w * P, h * P) }
+  const ink = '#4a2b3d', roof = '#ff9ec7', roofDark = '#ff6fa8', wall = '#fff3e6', wallShade = '#ffe0cc', door = '#3a2433'
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  px(4, 47, 52, 2, 'rgba(0,0,0,.18)')                               // bayangan tanah
+  px(10, 22, 40, 26, ink); px(11, 23, 38, 24, wall); px(11, 42, 38, 5, wallShade) // dinding
+  for (let i = 0; i < 16; i++) {                                    // atap bertingkat (pixel)
+    const y = 6 + i, x = 30 - i - 2, w = (i + 2) * 2
+    px(x - 1, y, w + 2, 1, ink); px(x, y, w, 1, i % 4 < 2 ? roof : roofDark)
+  }
+  px(5, 22, 50, 2, ink)
+  px(38, 6, 5, 9, ink); px(39, 7, 3, 7, '#c9a0b0')                  // cerobong
+  const smoke = Math.floor(t / 400) % 3
+  px(39 + smoke % 2, 3 - smoke, 2, 2, 'rgba(160,160,170,.6)')
+  px(23, 30, 14, 18, ink); px(24, 31, 12, 17, door); px(25, 30, 10, 1, ink) // pintu
+  px(14, 27, 6, 6, ink); px(15, 28, 4, 4, '#a7e3ff'); px(40, 27, 6, 6, ink); px(41, 28, 4, 4, '#a7e3ff') // jendela
+  px(27, 25, 6, 3, roofDark); px(28, 26, 4, 1, '#fff')              // papan nama
+  if (home) { const f = ALMI.anims.sleep[Math.floor(t / 800) % 4]; almiDraw(ctx, f, 24 * P, 48 * P - 48 - 4, 48) } // tidur di pintu (1:1, tajam)
+}
+function openHouse() {
+  const home = !lastState.pet.out
+  const cv = el('canvas', { className: 'house', width: 240, height: 200 })
+  const ctx = cv.getContext('2d')
+  const loop = t => { if (!cv.isConnected && started) return; started ||= cv.isConnected; drawHouse(ctx, t, home); requestAnimationFrame(loop) }
+  let started = false
+  almiImg.complete ? requestAnimationFrame(loop) : almiImg.addEventListener('load', () => requestAnimationFrame(loop), { once: true })
+  openModal("Almi's House", [
+    cv,
+    el('p', { className: 'modal-text', textContent: home
+      ? 'Almi is napping at home. Let her out to walk around your pages, eat trackers, and close tabs you drop on her.'
+      : 'Almi is out exploring. Drag her anywhere and she will perch there. Drop a tab from the sidebar onto her to close it.' }),
+    el('p', { className: 'modal-text muted', textContent: `Today: ${lastState.blockedToday.toLocaleString('en-US')} trackers eaten · ${lastState.tabsEaten} tabs eaten in total` }),
+  ], [
+    { label: 'Close' },
+    { label: home ? 'Let Almi out' : 'Call Almi home', primary: true, onClick: () => almac.cmd('petOut', home) },
+  ])
+}
+$('#catBtn').addEventListener('click', openHouse)
 
 almac.cmd('ready')
 </script>

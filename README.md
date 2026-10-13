@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.2.0-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.3.0-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
@@ -44,7 +44,7 @@
 
 ### 🔑 Almac Passwords
 - Built-in password manager: **AES-256-GCM** vault, key derived from your master password (PBKDF2-SHA256, 600k iterations). Same scheme as Almac Remote
-- Offers to save after a successful sign-in; autofill dropdown on login fields; strong password generator
+- Bitwarden-style autofill: cat icon in login fields, dropdown on focus, email-first sign-ins, **⌘⇧L** to fill; strong password generator
 - **Touch ID unlock**, auto-lock after inactivity, sleep, or screen lock; copied passwords are cleared from the clipboard after 30 s
 - **Import / export CSV in Apple Passwords format** (`Title,URL,Username,Password,Notes,OTPAuth`), also reads Chrome/Brave/Edge exports
 - Private profiles never autofill or save
@@ -53,8 +53,9 @@
 - **Command palette (⌘K)** — search tabs across workspaces, bookmarks, history and commands
 - **Reopen closed tab (⌘⇧T)** and **Picture-in-Picture (⌘⌥P)**
 - **Focus mode** — block distracting sites for 25/50/90 minutes
-- **Almi, the pixel pet** — eats blocked trackers, sleeps when your tabs sleep; click for weekly stats
+- **Almi, the pixel cat** — walks around your pages with gravity (perches on surfaces), eats blocked trackers, eats tabs you drop on her (closes them), naps in her house
 - **Radio widget (⌘⇧M)** — floating pixel radio controls YouTube Music from any page: tracklist to pick a song, animated volume
+- **In-app updates** — signed (Ed25519) and checksum-verified, one click to update & restart
 
 ### 🔖 Profiles
 - Multiple **isolated profiles** — separate cookies, history, bookmarks, extensions
@@ -105,8 +106,13 @@ Grab the `.dmg` from [Releases](https://github.com/Alianama/almac-browser/releas
 The app is not notarized, so on first launch right-click the app → **Open**, or run:
 `xattr -dr com.apple.quarantine "/Applications/Almac Browser.app"`
 
-### Build
-`npm run dist` → output in `dist/`
+### Updates
+From v1.3.0, Almac updates itself: it checks GitHub Releases on launch and every 6 hours, or use **Almac Browser › Check for Updates…**.
+Every release ships a manifest signed with the maintainer's Ed25519 key. The app installs a download only when the signature and the SHA-512 checksum both match, so a compromised GitHub account cannot push a fake update.
+
+### Build & release
+- `npm run dist` → unsigned-feed build in `dist/`
+- `npm run release -- notes.md` → build, sign the update manifest with `~/.almac/update-key.pem`, and publish the GitHub release
 
 ### Run from Source
 

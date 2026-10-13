@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Almi</title>
+  <link rel="stylesheet" href="../node_modules/@fontsource/silkscreen/index.css">
+  <style>
+    /* jendela seukuran Almi yang ikut berpindah bersamanya (tidak ada area tembus-klik yang harus diatur).
+       Kucing selalu di tengah bawah; jendela membesar sementara untuk balon kata. */
+    * { box-sizing: border-box; margin: 0; }
+    html, body { height: 100%; overflow: hidden; background: transparent; user-select: none; font: 8px/1.3 'Silkscreen', ui-monospace, monospace; }
+    #cv { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); width: 112px; height: 112px; cursor: grab; }
+    body.held #cv { cursor: grabbing; }
+    @media (prefers-color-scheme: dark) { #cv { filter: drop-shadow(0 0 1px rgba(255, 255, 255, .5)); } }
+    .bubble { position: absolute; left: 50%; bottom: 100px; transform: translateX(-50%); max-width: 220px; padding: 5px 8px; background: #fffdf3; color: #111;
+      border: 2px solid #4a2b3d; border-radius: 7px; box-shadow: 2px 2px 0 #4a2b3d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      pointer-events: none; animation: pop .18s steps(3); }
+    @keyframes pop { from { transform: translateX(-50%) scale(.4); opacity: 0; } }
+    .fx { position: absolute; pointer-events: none; font-size: 13px; animation: rise 1s steps(8) forwards; }
+    @keyframes rise { to { transform: translateY(-30px); opacity: 0; } }
+    .snack { position: absolute; width: 22px; height: 22px; pointer-events: none; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <canvas id="cv" width="224" height="224"></canvas>
+<script src="almi.js"></script>
+<script>
+// posisi Almi: cx = tengah badan, by = kaki, relatif terhadap area konten jendela Almac (area dikirim main)
+const BASE = { w: 112, h: 112 }, SIZE = 96, SPEED = { walk: 30, run: 95 }
+let area = { w: 800, h: 600, floor: 590, ledges: [{ x1: 0, x2: 800, y: 590 }] }
+const p = { cx: 400, by: 590, dir: 1, mode: 'idle', until: 0, target: 0, t: 0, frame: 0, fps: 2, anim: 'idle', once: false, lift: 0, vx: 0, vy: 0 }
+let today = 0, sleeping = false, hungry = false, near = false, hover = false
+let blinkUntil = 0, squashT = -1, held = null, dragVx = 0, lastEat = -1e9, lastPet = -1e9, sentPos = ''
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d')
+const rnd = (a, b) => a + Math.random() * (b - a)
+const onFloor = () => p.by >= area.floor - 2
+const clampPos = () => { p.cx = Math.max(24, Math.min(area.w - 24, p.cx)); p.by = Math.min(area.floor, p.by) }
+// ---- gravitasi: Almi hanya bisa berdiri di permukaan (lantai, tepi atas halaman, tepi atas kartu sidebar) ----
+const spans = (l, x) => x >= l.x1 - 6 && x <= l.x2 + 6
+const ledgeUnder = () => area.ledges.find(l => spans(l, p.cx) && Math.abs(l.y - p.by) <= 2)
+function fall(vx = 0) { Object.assign(p, { mode: 'fall', vx, vy: 0, once: false, anim: 'jump', fps: 0, frame: 1 }) }
+function land(l) {
+  p.by = l.y; p.vy = p.vx = 0; squashT = performance.now()
+  Object.assign(p, { mode: 'idle', anim: 'jump', fps: 0, frame: 2, until: performance.now() + 220, once: true })
+}
+
+// animasi sementara: setelah ms selesai, kembali ke think()
+function play(anim, fps, ms) { Object.assign(p, { anim, fps, frame: 0, until: performance.now() + ms, once: true }); if (p.mode === 'walk' || p.mode === 'run') p.mode = 'idle' }
+function idleAs(anim, ms) { Object.assign(p, { mode: 'idle', anim, fps: anim === 'idle' ? 2 : 3, frame: 0, until: performance.now() + ms, once: false }) }
+function think(now) {
+  if (hungry) return idleAs('alert', 600)
+  if (sleeping) return Object.assign(p, { mode: 'sleep', anim: 'sleep', fps: 1.2, frame: 0, until: now + 6000, once: false })
+  const r = Math.random()
+  // jalan hanya di sepanjang permukaan tempat berdiri; permukaan sempit = diam saja
+  const l = ledgeUnder() || { x1: 0, x2: area.w }
+  const room = l.x2 - l.x1 > 70, pick = () => rnd(Math.max(30, l.x1 + 22), Math.min(area.w - 30, l.x2 - 22))
+  if (room && r < 0.45) Object.assign(p, { mode: 'walk', target: pick(), until: now + 15000, once: false })
+  else if (room && r < 0.55 && l.x2 - l.x1 > 240) Object.assign(p, { mode: 'run', target: pick(), until: now + 8000, once: false })
+  else idleAs(r < 0.8 ? 'idle' : r < 0.9 ? 'look' : 'wave', rnd(1800, 4500))
+}
+
+// ---- tiap frame layar: gerak + gambar. Di antara frame sprite diisi gerak halus (ayun langkah, napas, gepeng) ----
+let last = performance.now()
+function tick(now) {
+  const dt = Math.min(0.05, (now - last) / 1000)
+  last = now; p.t += dt
+  if (held) {
+    // posisi diatur mouse
+  } else if (p.mode === 'fall') {
+    p.vy = Math.min(p.vy + 1500 * dt, 900)
+    const nb = p.by + p.vy * dt
+    p.cx += p.vx * dt
+    if (p.cx < 24 || p.cx > area.w - 24) { p.vx *= -0.5; p.cx = Math.max(24, Math.min(area.w - 24, p.cx)) }
+    p.dir = p.vx ? Math.sign(p.vx) : p.dir
+    // mendarat di permukaan pertama yang dilewati kaki
+    const hit = area.ledges.filter(l => spans(l, p.cx) && l.y >= p.by - 0.5 && l.y <= nb).sort((a, b) => a.y - b.y)[0]
+    if (hit) land(hit); else p.by = nb
+  } else if (p.mode === 'enter') { // melompat keluar dari rumah
+    const k = Math.min(1, (now - p.start) / 650)
+    p.lift = Math.sin(k * Math.PI) * 46; p.anim = 'jump'; p.frame = Math.min(2.9, k * 3); p.fps = 0
+    if (k >= 1) { p.lift = 0; p.by = area.floor; squashT = now; p.mode = 'idle'; play('happy', 6, 900) }
+  } else if (p.mode === 'leave') {
+    // melambai; main menutup jendela setelah pet.gone()
+  } else if (p.once) {
+    if (now > p.until) { p.once = false; if (p.resume) { p.mode = p.resume; p.resume = null } else think(now) } // lanjut jalan setelah menoleh
+  } else if (p.mode === 'walk' || p.mode === 'run') {
+    const d = p.target - p.cx, dir = Math.sign(d) || p.dir
+    if (dir !== p.dir) { p.dir = dir; p.resume = p.mode; Object.assign(p, { anim: 'look', fps: 6, frame: 0, until: now + 180, once: true }) } // menoleh dulu sebelum berbalik
+    else {
+      p.anim = p.mode === 'run' ? 'run' : 'walk'
+      p.fps = p.mode === 'run' ? 14 : 12
+      if (!hover) p.cx += p.dir * Math.min(Math.abs(d), SPEED[p.mode] * dt)
+      if (Math.abs(d) < 1 || now > p.until) think(now)
+    }
+  } else if (now > p.until && !hover && !near) think(now)
+  if (!held && !p.once && !['enter', 'leave', 'fall'].includes(p.mode) && sleeping !== (p.mode === 'sleep')) think(now)
+  if (!held && !['enter', 'leave', 'fall'].includes(p.mode) && !ledgeUnder()) fall() // permukaan hilang (sidebar disembunyikan, ukuran berubah)
+  if (Math.random() < dt / 3.5) blinkUntil = now + 150
+  p.frame += dt * p.fps
+  draw(now)
+  sendPos()
+  requestAnimationFrame(tick)
+}
+
+function frameOf(now) {
+  if (held) return { idx: ALMI.anims.alert[Math.floor(now / 200) % 2], anim: 'alert' }
+  if (near) return { idx: ALMI.anims.hungry[Math.floor(now / 260) % 2], anim: 'hungry' } // mulut menganga makin lebar
+  let frames = ALMI.anims[p.anim], i = Math.floor(p.frame)
+  if (p.anim === 'jump') i = Math.min(Math.floor(p.frame), 2)
+  if (p.anim === 'idle' && now < blinkUntil) frames = ALMI.anims.blink // kedip: frame tambahan
+  return { idx: frames[i % frames.length], anim: p.anim }
+}
+function draw(now) {
+  const { idx, anim } = frameOf(now)
+  const S = cv.width / 112 // kanvas 2x untuk layar retina
+  let sx = 1, sy = 1, dy = 0, rot = 0
+  // ayunan langkah sudah ada di frame jalan/lari (8 & 6 frame); di sini hanya napas, gepeng, dll.
+  if (anim === 'hungry') { const w = Math.sin(now / 70) * 0.04; sx = 1.14 + w; sy = 1.14 - w }   // badan membesar, siap makan
+  if (anim === 'chomp') { const k = Math.abs(Math.sin(now / 90)); sx = 1.1 + k * 0.08; sy = 1.1 - k * 0.08 }
+  if (held) { rot = Math.max(-0.4, Math.min(0.4, -dragVx * 0.0006)); sy = 1.06; sx = 0.95 }
+  if (squashT > 0) { // mendarat / dilepas: gepeng lalu memantul
+    const k = (now - squashT) / 320
+    if (k < 1) { const s = Math.sin(k * Math.PI) * (1 - k); sx *= 1 + s * 0.35; sy *= 1 - s * 0.3 } else squashT = -1
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.imageSmoothingEnabled = false
+  ctx.clearRect(0, 0, cv.width, cv.height)
+  ctx.fillStyle = 'rgba(0,0,0,.22)' // bayangan kaki
+  ctx.beginPath(); ctx.ellipse(56 * S, 106 * S, (anim === 'sleep' || anim === 'walk' || anim === 'run' ? 34 : 24) * S * (1 - Math.min(0.5, p.lift / 120)), 4 * S, 0, 0, Math.PI * 2); ctx.fill()
+  ctx.translate(56 * S, (108 + dy - p.lift) * S)
+  ctx.rotate(rot)
+  ctx.scale(sx, sy)
+  // sprite samping menghadap kanan -> dibalik saat ke kiri
+  const flip = p.dir < 0 && ['walk', 'run', 'jump', 'look'].includes(anim)
+  almiDraw(ctx, idx, -SIZE / 2 * S, (-SIZE + 4) * S, SIZE * S, flip) // 48px x4 di layar retina = pixel tajam
+}
+
+// ---- jendela mengikuti posisi ----
+function sendPos(save) {
+  clampPos()
+  const key = Math.round(p.cx) + ',' + Math.round(p.by)
+  if (key === sentPos && !save) return
+  sentPos = key
+  pet.pos({ cx: Math.round(p.cx), by: Math.round(p.by), save: !!save })
+}
+let bubbleTimer
+function say(text, ms = 2400) {
+  document.querySelector('.bubble')?.remove()
+  const b = Object.assign(document.createElement('div'), { className: 'bubble', textContent: text })
+  document.body.append(b)
+  pet.size({ w: Math.min(240, Math.max(BASE.w, b.offsetWidth + 16)), h: BASE.h + 34 }) // ruang untuk balon
+  clearTimeout(bubbleTimer)
+  bubbleTimer = setTimeout(() => { b.remove(); pet.size(BASE) }, ms)
+}
+function fx(text, color) {
+  const f = Object.assign(document.createElement('div'), { className: 'fx', textContent: text })
+  f.style.color = color; f.style.left = innerWidth / 2 + rnd(-30, 20) + 'px'; f.style.bottom = rnd(70, 90) + 'px'
+  document.body.append(f); setTimeout(() => f.remove(), 1000)
+}
+
+// ---- mouse: seret ke mana saja, lepas = bertengger di situ; klik = dielus; klik dua kali = statistik ----
+cv.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || held) return
+  cv.setPointerCapture(e.pointerId)
+  held = { sx: e.screenX, sy: e.screenY, cx: p.cx, by: p.by, lx: e.screenX, lt: e.timeStamp, moved: false }
+  dragVx = 0
+})
+cv.addEventListener('pointermove', e => {
+  if (!held) return
+  dragVx = (e.screenX - held.lx) / Math.max(0.001, (e.timeStamp - held.lt) / 1000)
+  held.lx = e.screenX; held.lt = e.timeStamp
+  if (!held.moved && Math.abs(e.screenX - held.sx) + Math.abs(e.screenY - held.sy) > 4) { held.moved = true; document.body.classList.add('held') }
+  if (held.moved) { p.cx = held.cx + e.screenX - held.sx; p.by = held.by + e.screenY - held.sy }
+})
+function release() {
+  if (!held) return
+  const moved = held.moved
+  held = null
+  document.body.classList.remove('held')
+  const now = performance.now()
+  if (moved) { // dilepas: jatuh sampai mendarat di permukaan (bertengger kalau ada dasarnya)
+    const l = ledgeUnder()
+    l ? land(l) : fall(Math.max(-400, Math.min(400, dragVx * 0.25)))
+    setTimeout(() => { sendPos(true); if (!onFloor() && Math.random() < 0.5) say(['Nice view!', 'Comfy spot!', 'I like it up here.'][Math.floor(Math.random() * 3)], 1800) }, 900)
+    return
+  }
+  if (now - lastPet < 350) return
+  lastPet = now
+  play('happy', 6, 1300)
+  fx('♥', '#ff5d8f'); setTimeout(() => fx('♥', '#ff8fb1'), 160)
+  say(sleeping ? 'Zzz… all your tabs are asleep' : today ? `Meow! ${today.toLocaleString('en-US')} trackers eaten today` : 'Meow! Drag a tab to me to feed me.')
+}
+cv.addEventListener('pointerup', release)
+cv.addEventListener('pointercancel', release)
+cv.addEventListener('dblclick', e => { if (e.isTrusted) pet.stats() })
+cv.addEventListener('pointerenter', () => { hover = true; if (!p.once && (p.mode === 'walk' || p.mode === 'run')) idleAs('look', 1500) })
+cv.addEventListener('pointerleave', () => { hover = false })
+
+// ---- kasih makan: tab diseret dari sidebar & dijatuhkan ke Almi -> dimakan -> tab ditutup ----
+document.addEventListener('dragenter', e => { e.preventDefault(); near = true })
+document.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; near = true })
+document.addEventListener('dragleave', e => { if (!e.relatedTarget) near = false })
+document.addEventListener('drop', async e => {
+  e.preventDefault()
+  near = false
+  const tab = await pet.eatTab() // main tahu tab mana yang sedang diseret dari sidebar
+  if (!tab) return say('Hmm, that is not a tab.')
+  if (tab.favicon) { // favicon tab tersedot ke mulut
+    const img = Object.assign(new Image(), { className: 'snack', src: tab.favicon })
+    img.style.left = innerWidth / 2 - 11 + 'px'; img.style.bottom = '96px'
+    document.body.append(img)
+    img.animate([{ transform: 'translateY(0) scale(1)' }, { transform: 'translateY(46px) scale(.15) rotate(200deg)', opacity: 0.3 }], { duration: 420, easing: 'steps(6)', fill: 'forwards' })
+    setTimeout(() => img.remove(), 450)
+  }
+  play('chomp', 8, 1100)
+  setTimeout(() => { play('happy', 6, 1200); fx('♥', '#ff5d8f'); say('Yum! ' + (tab.title || 'Tab') + ' closed') }, 1100)
+})
+
+pet.onState(s => { today = s.today; sleeping = s.sleeping })
+pet.onArea(a => {
+  area = a; clampPos()
+  // permukaan bergeser sedikit (ubah ukuran jendela/sidebar): ikut menempel
+  const near = !held && p.mode !== 'fall' && area.ledges.filter(l => spans(l, p.cx) && Math.abs(l.y - p.by) <= 12).sort((x, y) => Math.abs(x.y - p.by) - Math.abs(y.y - p.by))[0]
+  if (near) p.by = near.y
+})
+pet.onPlace(pos => { if (!held) { p.cx = pos.cx; p.by = pos.by; clampPos() } })
+pet.onHungry(on => { hungry = on; if (on) { idleAs('alert', 600); say('Ooh! Drop that tab on me 🍽', 2600) } })
+pet.onEat(n => {
+  today = n
+  const now = performance.now()
+  if (now - lastEat < 3000 || held || near || p.once) return // satu animasi makan tracker per 3 detik
+  lastEat = now
+  play('meow', 7, 600)
+  fx('+1', '#22c55e')
+})
+pet.onEnter(() => { p.mode = 'enter'; p.start = performance.now(); say('Meow! I am out!', 1600) })
+pet.onLeave(() => { p.mode = 'leave'; p.anim = 'wave'; p.fps = 4; p.once = false; say('Going home, bye!', 1200); setTimeout(() => pet.gone(), 1100) })
+almiImg.complete ? requestAnimationFrame(tick) : almiImg.addEventListener('load', () => requestAnimationFrame(tick), { once: true })
+</script>
+</body>
+</html>

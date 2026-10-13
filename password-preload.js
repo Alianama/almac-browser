@@ -1,100 +1,193 @@
 // Autofill & simpan password di halaman web (isolated world, halaman tidak bisa memanggil ipc ini).
 // Main yang menentukan origin (dari frame pengirim) dan hanya mengembalikan login untuk origin itu.
 // Hanya frame utama; aksi hanya dari event asli user (isTrusted).
+// Seperti Bitwarden: ikon di dalam kolom login, dropdown saat kolom difokus (termasuk login "email dulu"), ⌘⇧L = isi otomatis.
 const { ipcRenderer } = require('electron')
 
 if (window === window.top && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   const ask = (type, arg) => ipcRenderer.invoke('pw', type, arg)
-  const visible = el => el.offsetWidth > 0 && el.offsetHeight > 0
-  const pwFields = root => [...root.querySelectorAll('input[type=password]')].filter(visible)
-  // kolom username = input teks/email terakhir sebelum kolom password (dalam form yang sama kalau ada)
-  function userField(pw) {
-    const scope = pw.form || document
-    const inputs = [...scope.querySelectorAll('input:not([type]),input[type=text],input[type=email],input[type=tel]')].filter(visible)
-    return inputs.filter(i => i.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1) || null
+  const visible = el => el.offsetWidth > 0 && el.offsetHeight > 0 && getComputedStyle(el).visibility !== 'hidden'
+  const isPw = el => el?.tagName === 'INPUT' && el.type === 'password'
+  const USER_HINT = /user|email|e-mail|login|account|identifier|phone|surel|nama/i
+  const isUser = el => el?.tagName === 'INPUT' && ['text', 'email', 'tel', ''].includes(el.type) &&
+    (el.type === 'email' || /username|email/.test(el.autocomplete) || USER_HINT.test([el.name, el.id, el.placeholder, el.getAttribute('aria-label')].join(' ')))
+  // kolom di dalam shadow DOM terbuka juga dicari
+  function allInputs(root = document, out = []) {
+    for (const el of root.querySelectorAll('input, *')) {
+      if (el.tagName === 'INPUT') { if (visible(el)) out.push(el) } else if (el.shadowRoot) allInputs(el.shadowRoot, out)
+    }
+    return out
   }
+  const scopeOf = el => el.form || el.getRootNode()
+  const inScope = (el, scope) => scope === document || scope.contains?.(el) || el.getRootNode() === scope
+  // username = kolom teks sebelum password (utamakan yang namanya mirip email/username)
+  function userFor(pw) {
+    const before = allInputs().filter(i => i !== pw && ['text', 'email', 'tel', ''].includes(i.type) && inScope(i, scopeOf(pw)) &&
+      (i.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING))
+    return before.filter(isUser).at(-1) || before.at(-1) || null
+  }
+  function fieldsAround(field) {
+    if (isPw(field)) return { pw: field, user: userFor(field) }
+    const pw = allInputs().find(i => isPw(i) && inScope(i, scopeOf(field))) || null
+    return { pw, user: field }
+  }
+  const loginFields = () => allInputs().filter(i => isPw(i) || (isUser(i) && i.offsetWidth >= 80)).slice(0, 8)
   const setVal = (el, v) => {
     if (!el) return
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v) // React/Vue ikut terdeteksi
     el.dispatchEvent(new Event('input', { bubbles: true }))
     el.dispatchEvent(new Event('change', { bubbles: true }))
   }
+  async function fill(field, id) {
+    const c = await ask('fill', id)
+    if (!c) return
+    const { pw, user } = fieldsAround(field)
+    if (user) setVal(user, c.username)
+    if (pw) setVal(pw, c.password)
+    else ask('chose', id) // langkah email saja: ingat login ini untuk langkah password berikutnya
+  }
 
-  // ---- dropdown di bawah kolom (shadow root tertutup: halaman tidak bisa membaca isinya) ----
-  let host = null, anchor = null
-  const close = () => { host?.remove(); host = null }
-  function dropdown(anchor_, items) {
-    close()
-    anchor = anchor_
-    host = document.createElement('almac-passwords')
-    const root = host.attachShadow({ mode: 'closed' })
-    const r = anchor_.getBoundingClientRect()
-    root.innerHTML = `<style>
-      :host { all: initial; position: fixed; z-index: 2147483647; left: ${r.left}px; top: ${r.bottom + 4}px; }
-      div { min-width: ${Math.max(220, r.width)}px; background: #fffdf3; color: #111; border: 2px solid #111; border-radius: 10px;
-        box-shadow: 3px 3px 0 #111; padding: 4px; font: 13px -apple-system, system-ui, sans-serif; }
-      button { all: unset; box-sizing: border-box; display: flex; gap: 8px; align-items: center; width: 100%; padding: 7px 9px; border-radius: 7px; cursor: pointer; }
-      button:hover { background: #f6ec9f; }
-      small { color: #4b5563; margin-left: auto; }
-      b { font-family: ui-monospace, monospace; font-size: 10px; letter-spacing: .5px; }
-      @media (prefers-color-scheme: dark) { div { background: #2a2e48; color: #f1f2f6; border-color: #000; box-shadow: 3px 3px 0 #000; } button:hover { background: #3b3f63; } small { color: #9aa0bd; } }
-    </style><div></div>`
-    const box = root.querySelector('div')
-    for (const it of items) {
+  // ---- lapisan Almac (shadow root tertutup: halaman tidak bisa membaca isinya): dropdown + ikon di kolom ----
+  const host = document.createElement('almac-passwords')
+  const ui = host.attachShadow({ mode: 'closed' })
+  ui.innerHTML = `<style>
+    :host { all: initial; }
+    .menu { position: fixed; z-index: 2147483647; min-width: 240px; background: #fffdf3; color: #111; border: 2px solid #4a2b3d; border-radius: 10px;
+      box-shadow: 3px 3px 0 #4a2b3d; padding: 4px; font: 13px -apple-system, system-ui, sans-serif; }
+    .menu button { all: unset; box-sizing: border-box; display: flex; gap: 9px; align-items: center; width: 100%; padding: 7px 9px; border-radius: 7px; cursor: pointer; }
+    .menu button:hover, .menu button.sel { background: #ffe1ec; }
+    .menu small { color: #6b5562; margin-left: auto; padding-left: 10px; }
+    .menu hr { border: 0; border-top: 1px solid #e8d5de; margin: 3px 2px; }
+    .menu .who { display: flex; flex-direction: column; min-width: 0; }
+    .menu .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+    .menu .head { padding: 4px 9px 6px; font-size: 11px; color: #6b5562; }
+    .ico { position: fixed; z-index: 2147483646; width: 18px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer; opacity: .9; }
+    .ico:hover { opacity: 1; transform: scale(1.1); }
+    svg { display: block; shape-rendering: crispEdges; }
+    @media (prefers-color-scheme: dark) {
+      .menu { background: #2a2e48; color: #f1f2f6; border-color: #000; box-shadow: 3px 3px 0 #000; }
+      .menu button:hover, .menu button.sel { background: #3b3f63; } .menu small, .menu .head { color: #9aa0bd; } .menu hr { border-top-color: #3b3f63; }
+    }
+  </style><div id="icons"></div>`
+  // ikon kepala kucing pink (Almi), 9x8 pixel
+  const CAT = '<svg viewBox="0 0 9 8" width="18" height="16"><path fill="#5c324a" d="M0 0h2v1H0zM7 0h2v1H7zM0 1h1v6H0zM8 1h1v6H8zM2 1h1v1H2zM6 1h1v1H6zM3 2h3v1H3zM1 7h7v1H1z"/><path fill="#ffb8d0" d="M1 1h1v6H1zM7 1h1v6H7zM2 2h1v5H2zM6 2h1v5H6zM3 3h3v4H3z"/><path fill="#fff" d="M3 4h3v3H3z"/><path fill="#2e1c2a" d="M2 4h1v1H2zM6 4h1v1H6z"/><path fill="#ff6896" d="M4 5h1v1H4z"/></svg>'
+  let mounted = false
+  const mount = () => { if (!mounted && document.documentElement) { document.documentElement.append(host); mounted = true } }
+
+  let menu = null, anchor = null, items = [], sel = -1
+  const close = () => { menu?.remove(); menu = null; anchor = null }
+  function show(field, list, head) {
+    close(); mount()
+    anchor = field; items = list; sel = -1
+    menu = document.createElement('div'); menu.className = 'menu'
+    if (head) menu.append(Object.assign(document.createElement('div'), { className: 'head', textContent: head }))
+    for (const it of list) {
+      if (it === '-') { menu.append(document.createElement('hr')); continue }
       const b = document.createElement('button')
-      b.innerHTML = '<b>ALMAC</b><span></span><small></small>'
-      b.children[1].textContent = it.label
-      b.children[2].textContent = it.sub || ''
+      b.innerHTML = CAT + '<div class="who"><span></span></div><small></small>'
+      b.querySelector('span').textContent = it.label
+      b.querySelector('small').textContent = it.sub || ''
       b.addEventListener('mousedown', e => e.preventDefault()) // kolom tetap fokus
       b.addEventListener('click', e => { if (e.isTrusted) { close(); it.run() } })
-      box.append(b)
+      menu.append(b)
     }
-    document.documentElement.append(host)
+    ui.append(menu)
+    const r = field.getBoundingClientRect()
+    menu.style.left = Math.max(4, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px'
+    menu.style.top = (r.bottom + menu.offsetHeight + 8 > innerHeight ? r.top - menu.offsetHeight - 4 : r.bottom + 4) + 'px'
   }
 
   async function offer(field) {
-    const pw = field.type === 'password' ? field : pwFields(field.form || document)[0]
-    if (!pw) return
-    const isNew = pw.autocomplete === 'new-password' || pwFields(pw.form || document).length > 1
+    const { pw } = fieldsAround(field)
+    const isNew = isPw(field) && (field.autocomplete === 'new-password' || allInputs().filter(isPw).length > 1)
     const s = await ask('query')
-    if (document.activeElement !== field) return
-    const items = []
-    if (s.locked && s.setup) items.push({ label: 'Unlock Almac Passwords', run: () => ask('unlock') })
-    for (const l of s.logins || []) items.push({ label: l.username || '(no username)', sub: '••••••••', run: async () => {
-      const c = await ask('fill', l.id)
-      if (c) { setVal(userField(pw), c.username); setVal(pw, c.password) }
-    } })
-    if (isNew && field.type === 'password') items.push({ label: 'Use a strong password', sub: 'generated', run: async () => {
+    if (!s || anchor && anchor !== field) return
+    const list = []
+    if (!s.setup) list.push({ label: 'Set up Almac Passwords', sub: 'save & autofill', run: () => ask('unlock') })
+    else if (s.locked) list.push({ label: 'Unlock Almac Passwords', sub: '⌘⇧L', run: () => ask('unlock') })
+    for (const l of s.logins || []) list.push({ label: l.username || '(no username)', sub: l.chosen ? 'continue' : pw ? 'fill' : 'fill email', run: () => fill(field, l.id) })
+    if (s.setup && !s.locked && !s.logins?.length && !isNew) list.push({ label: 'No saved login for ' + s.host, sub: 'sign in to save', run: () => {} })
+    if (isNew) list.push({ label: 'Use a strong password', sub: 'generated', run: async () => {
       const g = await ask('generate')
-      pwFields(pw.form || document).forEach(p => setVal(p, g))
+      allInputs().filter(i => isPw(i) && inScope(i, scopeOf(field))).forEach(p => setVal(p, g))
     } })
-    items.length ? dropdown(field, items) : close()
+    if (s.setup) list.push('-', { label: 'Manage passwords…', sub: '⌘⇧P', run: () => ask('manager') })
+    show(field, list, s.logins?.length ? `Almac Passwords · ${s.host}` : '')
   }
-  document.addEventListener('focusin', e => {
-    const f = e.target
-    if (!e.isTrusted || f.tagName !== 'INPUT') return
-    if (f.type === 'password' || (pwFields(f.form || document).length && userField(pwFields(f.form || document)[0]) === f)) offer(f)
-  }, true)
-  // tutup hanya kalau fokus sudah pindah dari kolom pemilik dropdown (focusout kolom sebelumnya jangan menutup dropdown baru)
-  document.addEventListener('focusout', () => setTimeout(() => { if (host && document.activeElement !== anchor) close() }, 150), true)
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') close() }, true)
-  addEventListener('scroll', close, true)
 
-  // ---- tawarkan simpan: submit form, Enter di kolom password, atau klik tombol di form login (SPA tanpa submit) ----
+  const target = e => e.composedPath?.()[0] || e.target
+  document.addEventListener('focusin', e => {
+    const f = target(e)
+    if (e.isTrusted && (isPw(f) || isUser(f))) offer(f)
+  }, true)
+  // tutup hanya kalau fokus sudah pindah dari kolom pemilik dropdown
+  document.addEventListener('focusout', () => setTimeout(() => { if (menu && !anchor?.matches(':focus')) close() }, 150), true)
+  document.addEventListener('keydown', e => {
+    if (!menu || !e.isTrusted) return
+    const btns = [...menu.querySelectorAll('button')]
+    if (e.key === 'Escape') close()
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + btns.length) % btns.length; btns.forEach((b, i) => b.classList.toggle('sel', i === sel)) }
+    else if (e.key === 'Enter' && sel >= 0) { e.preventDefault(); e.stopPropagation(); btns[sel].click() }
+  }, true)
+  addEventListener('scroll', () => { close(); placeIcons() }, true)
+  addEventListener('resize', () => { close(); placeIcons() })
+
+  // ikon kucing di sisi kanan kolom login (klik = buka dropdown)
+  let iconTimer
+  function placeIcons() {
+    const box = ui.getElementById('icons')
+    const fields = loginFields()
+    if (!fields.length) return box.replaceChildren()
+    mount()
+    box.replaceChildren(...fields.map(f => {
+      const r = f.getBoundingClientRect()
+      if (r.width < 80 || r.height < 18) return ''
+      const b = Object.assign(document.createElement('button'), { className: 'ico', title: 'Almac Passwords', innerHTML: CAT })
+      b.style.left = r.right - 26 + 'px'; b.style.top = r.top + (r.height - 16) / 2 + 'px'
+      b.addEventListener('mousedown', e => e.preventDefault())
+      b.addEventListener('click', e => { if (!e.isTrusted) return; f.focus(); offer(f) })
+      return b
+    }))
+  }
+  const schedule = () => { iconTimer ||= setTimeout(() => { iconTimer = null; placeIcons() }, 300) } // throttle: halaman beranimasi tetap dapat ikon
+  new MutationObserver(schedule).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['type', 'style', 'class', 'hidden'] })
+  addEventListener('load', schedule)
+
+  // ⌘⇧L (menu Almac) / tombol "Fill" di pengelola: isi login untuk situs ini
+  ipcRenderer.on('pw-autofill', async (_, id) => {
+    const fields = loginFields()
+    const focused = fields.find(f => f === document.activeElement || f.matches(':focus'))
+    const field = focused || fields.find(isUser) || fields.find(isPw)
+    if (!field) return
+    const s = await ask('query')
+    if (!s?.setup || s.locked) return ask('unlock')
+    const l = (s.logins || []).find(x => x.id === id) || s.logins?.[0]
+    if (l) fill(field, l.id); else field.focus()
+  })
+
+  ipcRenderer.on('pw-unlocked', () => { const f = loginFields().find(x => x.matches(':focus')); if (f) offer(f) })
+
+  // ---- tawarkan simpan: submit, Enter, atau klik tombol di form login (SPA tanpa submit) ----
   let lastSent = ''
   function capture(scope) {
-    const pw = pwFields(scope).find(p => p.value)
-    if (!pw) return
-    const username = userField(pw)?.value || ''
+    const root = scope || document
+    const pw = allInputs().find(i => isPw(i) && i.value && inScope(i, root))
+    if (!pw) { // langkah email saja (Google, Microsoft, dll): ingat username untuk langkah password
+      const u = allInputs().find(i => isUser(i) && i.value && inScope(i, root))
+      if (u) ask('user', u.value)
+      return
+    }
+    const username = userFor(pw)?.value || ''
     const key = username + '\n' + pw.value
     if (key === lastSent) return
     lastSent = key
     ask('capture', { username, password: pw.value })
   }
   document.addEventListener('submit', e => { if (e.isTrusted) capture(e.target) }, true)
-  document.addEventListener('keydown', e => { if (e.isTrusted && e.key === 'Enter' && e.target.type === 'password') capture(e.target.form || document) }, true)
+  document.addEventListener('keydown', e => { const t = target(e); if (e.isTrusted && e.key === 'Enter' && !menu && (isPw(t) || isUser(t))) capture(scopeOf(t)) }, true)
   document.addEventListener('click', e => {
-    const b = e.isTrusted && e.target.closest?.('button, input[type=submit], [role=button]')
+    const t = target(e)
+    const b = e.isTrusted && t.closest?.('button, input[type=submit], [role=button]')
     if (b) capture(b.form || b.closest('form') || document)
   }, true)
 }

@@ -644,15 +644,6 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
 /* pet pixel (Almi), badge fokus, command palette, statistik */
-.pet { margin-left: auto; width: 26px; height: 24px; padding: 2px; flex: none; background: none; border: 0; box-shadow: none; -webkit-app-region: no-drag; cursor: pointer; }
-.pet svg { width: 100%; height: 100%; display: block; }
-.pet[data-mood="idle"] svg { animation: pet-bob 1.6s steps(2) infinite; }
-.pet[data-mood="sleep"] svg { opacity: .7; }
-.pet.eat svg { animation: pet-eat .5s steps(3); }
-@keyframes pet-bob { 50% { transform: translateY(-1px); } }
-@keyframes pet-eat { 33% { transform: scale(1.15, .85); } 66% { transform: scale(.9, 1.1); } }
-.pet.big { width: 72px; height: 60px; flex: none; }
-.pet.big svg { width: 100%; height: 100%; animation: pet-bob 1.6s steps(2) infinite; }
 .focus-badge { margin-left: 6px; padding: 2px 5px; font-size: 9px; color: #111; background: #ffcd75; border: var(--bw) solid var(--border); border-radius: 5px; box-shadow: 2px 2px 0 var(--shadow); cursor: pointer; -webkit-app-region: no-drag; }
 #shield { cursor: pointer; }
 .palette-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
@@ -669,3 +660,24 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 .pw-row { cursor: pointer; }
 .pw-row .fav-img { width: 16px; height: 16px; flex: none; }
 #pwBtn.locked .wsi { opacity: .6; }
+
+/* update */
+.upd-notes { max-height: 34vh; overflow-y: auto; padding: 8px 10px; background: var(--field); border: var(--bw) solid var(--border); border-radius: 8px; font: 12px/1.5 var(--font-ui); white-space: pre-wrap; user-select: text; }
+.upd-bar { height: 10px; }
+
+
+/* tombol kucing & rumah Almi */
+#catBtn { padding: 0; display: grid; place-items: center; }
+#catBtn canvas { display: block; }
+#catBtn.home canvas { opacity: .75; }
+.house { display: block; margin: 0 auto; width: 240px; height: 200px; image-rendering: pixelated; }
+.modal-text.muted { font-size: 11px; color: var(--muted); }
+.stats-hero canvas { flex: none; }
+
+/* counter blokir iklan di header (kanan atas), tombol status rata */
+.top-chip { flex: none; margin-left: auto; height: 24px; padding: 0 7px; font-size: 12px; -webkit-app-region: no-drag; cursor: pointer; box-shadow: 2px 2px 0 var(--shadow); }
+.top-chip .wsi { font-size: 14px; }
+.status { justify-content: space-between; }
+
+.pw-site { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; border-bottom: var(--bw) dashed var(--border); }
+.pw-site button.primary { height: 26px; padding: 0 12px; }

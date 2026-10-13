@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('almac', {
   onPermRequest: fn => ipcRenderer.on('perm-request', (_, r) => fn(r)),
   onOpenPalette: fn => ipcRenderer.on('open-palette', fn),
   onOpenPasswords: fn => ipcRenderer.on('open-passwords', fn),
+  onOpenUpdate: fn => ipcRenderer.on('open-update', fn),
+  onOpenStats: fn => ipcRenderer.on('open-stats', fn),
   onPwSave: fn => ipcRenderer.on('pw-save', (_, r) => fn(r)),
   onPwUnlock: fn => ipcRenderer.on('pw-unlock', fn),
   onToast: fn => ipcRenderer.on('toast', (_, text) => fn(text)),

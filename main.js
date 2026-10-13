@@ -7,9 +7,11 @@ const { installChromeWebStore, uninstallExtension } = require('electron-chrome-w
 const { ElectronBlocker } = require('@ghostery/adblocker-electron')
 const { getDomain } = require('tldts-experimental')
 const passwords = require('./passwords')
+const { createUpdater } = require('./updater')
 
 app.setName('Almac Browser')
 app.setAboutPanelOptions({ applicationName: 'Almac Browser', applicationVersion: app.getVersion(), iconPath: path.join(__dirname, 'build', 'icon.png') })
+if (process.env.ALMAC_TEST_DATA) app.setPath('userData', process.env.ALMAC_TEST_DATA) // tes: folder data terpisah
 // Satu instance saja: dua instance di folder data yang sama bisa merusak database (cookies, service worker)
 if (!app.requestSingleInstanceLock()) app.exit(0)
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus() } })
@@ -54,8 +56,8 @@ process.on('uncaughtException', e => {
   dialog.showErrorBox('Almac Browser error', e.stack || String(e))
 })
 
-let win, blocker
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let win, blocker, updater
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, pet: { out: true }, tabsEaten: 0, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -112,6 +114,7 @@ function pwLock() {
 }
 function pwAfterUnlock() {
   pwTouch()
+  activeTab()?.view?.webContents.send('pw-unlocked') // kolom yang sedang difokus langsung menampilkan login
   if (state.pwTouchId && safeStorage.isEncryptionAvailable()) fs.writeFileSync(TOUCH_FILE, safeStorage.encryptString(vault.key().toString('base64')), { mode: 0o600 })
   render(true)
 }
@@ -187,6 +190,7 @@ let downloadsVersion = 0, downloadTimer
 
 function load() {
   try { state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) } } catch {}
+  if (typeof state.pet !== 'object' || !state.pet) state.pet = { out: state.pet !== false } // dulu boolean
   if (!state.profiles.length) state.profiles.push({ id: 'p1', name: 'Personal', color: '#41a6f6' })
   if (!state.profiles.some(p => p.id === state.activeProfile)) state.activeProfile = state.profiles[0].id
   state.profiles.forEach(workspaces)
@@ -387,8 +391,11 @@ function flush() {
     canReopen: closedTabs.length > 0,
     allSleeping: !state.tabs.some(t => t.view),
     blockedToday: state.stats[dayKey()] || 0,
+    appVersion: app.getVersion(), pet: { out: !!state.pet.out }, tabsEaten: state.tabsEaten || 0, update: updater?.get() || { status: 'idle' },
     pw: { setup: vault.exists(), unlocked: vault.unlocked(), touchId: state.pwTouchId && fs.existsSync(TOUCH_FILE), canTouchId: process.platform === 'darwin' && systemPreferences.canPromptTouchID?.() && safeStorage.isEncryptionAvailable(), lockAfter: state.pwLockAfter },
   })
+  const petState = JSON.stringify({ sleeping: !state.tabs.some(t => t.view), today: state.stats[dayKey()] || 0 })
+  if (petWin && petState !== petSent) { petSent = petState; petWin.webContents.send('pet-state', JSON.parse(petState)) }
   // profil privat tidak pernah ditulis ke disk
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
   const tabs = state.tabs.filter(t => !priv.has(t.profileId)).map(({ profileId, wsId, url, title, favicon, lastActive, group }) => ({ profileId, wsId, url, title, favicon, lastActive, group }))
@@ -646,6 +653,7 @@ function layout() {
   shownViews = views
   const bounds = paneBounds(views.length, tabs[0]?.group)
   views.forEach((v, i) => { win.contentView.addChildView(v); v.setBounds(bounds[i]) })
+  petSync()
 }
 
 function selectTab(t) {
@@ -1034,6 +1042,25 @@ const commands = {
     vault.save(); pwTouch()
   },
   pwLock,
+  // tombol "Fill" di pengelola / ⌘⇧L: kirim ke halaman aktif, hanya kalau login itu memang untuk situs tersebut
+  pwFillActive: id => {
+    const t = activeTab(), wc = t?.view?.webContents
+    if (!wc) return
+    if (id && !(vault.unlocked() && vault.data.entries.some(e => e.id === id && e.origin === pwOrigin(wc.getURL())))) return
+    wc.focus(); wc.send('pw-autofill', id || null)
+  },
+  petOut: out => petOut(!!out),
+  // tab mulai diseret dari sidebar: Almi lapar; tab diingat sebentar setelah drag selesai (drop bisa datang belakangan)
+  petFeed: id => { clearTimeout(petFeedTimer); petFeedTab = id; petWin?.webContents.send('pet-hungry', true) },
+  petLedges: list => {
+    if (!Array.isArray(list)) return
+    petUiLedges = list.slice(0, 12).filter(l => [l?.x1, l?.x2, l?.y].every(Number.isFinite)).map(l => ({ x1: Math.round(l.x1), x2: Math.round(l.x2), y: Math.round(l.y) }))
+    petSync()
+  },
+  petFeedEnd: () => { petWin?.webContents.send('pet-hungry', false); petFeedTimer = setTimeout(() => { petFeedTab = null }, 1500) },
+  updateCheck: () => updater.check({ manual: true }),
+  updateDownload: async () => { await updater.download(); updater.install() }, // tombol "Update & Restart"
+  updateInstall: () => updater.install(),
   passwords: () => {
     try { clipboard.writeText(new URL(activeTab()?.url).hostname.replace(/^www\./, '')) } catch {}
     shell.openPath('/System/Applications/Passwords.app')
@@ -1229,6 +1256,12 @@ Object.assign(queries, {
       .sort((a, b) => a.origin.localeCompare(b.origin) || a.username.localeCompare(b.username)).map(pwPublic)
   }),
   pwNever: needVault(() => vault.data.never.slice().sort()),
+  pwSite: () => { // login untuk situs di tab aktif (bagian "This site" di pengelola)
+    const url = activeTab()?.url
+    if (!vault.unlocked() || !/^https?:/.test(url || '')) return { host: '', logins: [] }
+    const o = pwOrigin(url)
+    return { host: new URL(o).host, logins: vault.data.entries.filter(e => e.origin === o).map(pwPublic) }
+  },
   pwNeverRemove: needVault(origin => { vault.data.never = vault.data.never.filter(o => o !== origin); vault.save() }),
   pwReveal: needVault(id => vault.data.entries.find(e => e.id === id)?.password ?? null),
   pwCopy: needVault(({ id, field }) => {
@@ -1282,20 +1315,29 @@ ipcMain.handle('pw', (e, type, arg) => {
   if (u.protocol !== 'https:' && u.hostname !== 'localhost') return null
   const origin = pwOrigin(frame.url)
   const mine = () => vault.data.entries.filter(x => x.origin === origin)
+  const host = new URL(origin).host
   if (type === 'query') {
-    if (!vault.unlocked()) return { locked: true, setup: vault.exists() }
-    return { locked: false, logins: mine().map(x => ({ id: x.id, username: x.username })) }
+    if (!vault.unlocked()) return { locked: true, setup: vault.exists(), host }
+    // login yang dipilih di langkah email (Google, Microsoft, ...) tampil paling atas di langkah password
+    const chosen = t.pwChosen && Date.now() - t.pwChosen.ts < 600000 ? t.pwChosen.id : null
+    const logins = mine().map(x => ({ id: x.id, username: x.username, chosen: x.id === chosen })).sort((a, b) => b.chosen - a.chosen)
+    return { locked: false, setup: true, host, logins }
   }
+  if (type === 'chose' && vault.unlocked() && mine().some(x => x.id === arg)) { t.pwChosen = { id: arg, ts: Date.now() }; return null }
+  if (type === 'user') { t.pwLastUser = { origin, username: String(arg || '').slice(0, 500), ts: Date.now() }; return null }
+  if (type === 'manager') { win?.focus(); win?.webContents.send('open-passwords'); return null }
   if (type === 'fill') {
     const x = vault.unlocked() && mine().find(x => x.id === arg)
     if (!x) return null
     pwTouch()
     return { username: x.username, password: x.password }
   }
-  if (type === 'unlock') { if (t === activeTab()) win?.webContents.send('pw-unlock'); return null }
+  if (type === 'unlock') { if (t === activeTab()) { win?.focus(); win?.webContents.send('pw-unlock') } return null }
   if (type === 'generate') return passwords.generate()
   if (type === 'capture') {
-    const username = String(arg?.username || '').slice(0, 500), password = String(arg?.password || '')
+    // username kosong (form password saja): pakai email dari langkah sebelumnya di situs yang sama
+    const prev = t.pwLastUser?.origin === origin && Date.now() - t.pwLastUser.ts < 600000 ? t.pwLastUser.username : ''
+    const username = String(arg?.username || prev).slice(0, 500), password = String(arg?.password || '')
     if (!password || password.length > 1000) return null
     t.pendingPw = { origin, username, password, ts: Date.now() } // ditawarkan setelah halaman pindah (login berhasil)
   }
@@ -1398,13 +1440,91 @@ function toggleMusic() {
   render()
 }
 
+// ---- Almi: kucing pixel (ui/pet.html). Jendela seukuran Almi yang ikut berpindah bersamanya, jadi bisa diseret ke mana saja
+// di jendela Almac & bertengger di tempat dilepas. Rumahnya ada di sidebar (tombol kucing): keluar / pulang.
+const PET_BASE = { w: 112, h: 112 }
+let petWin = null, petSent = '', petSize = { ...PET_BASE }, petAreaSent = ''
+let petFeedTab = null, petFeedTimer // tab yang sedang diseret dari sidebar (untuk dimakan)
+let petUiLedges = [] // tepi atas kartu sidebar (dilaporkan UI), tempat Almi bisa bertengger
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
+// permukaan pijakan (gravitasi): lantai halaman, tepi atas halaman web, dan tepi atas kartu sidebar. {x1, x2, y} relatif konten
+function petArea() {
+  const c = win.getContentBounds(), floor = c.height - GAP
+  const pages = shownViews.length ? shownViews.map(v => v.getBounds()) : [{ x: sideSpace() + GAP, y: GAP + barSpace(), width: c.width - sideSpace() - GAP * 2 }]
+  const ledges = [
+    { x1: 0, x2: c.width, y: floor },
+    ...pages.map(b => ({ x1: b.x, x2: b.x + b.width, y: b.y })),
+    ...(state.sidebar.mode === 'pinned' ? petUiLedges : []),
+  ].filter(l => l.x2 - l.x1 >= 30 && l.y > 40 && l.y <= floor)
+  return { w: c.width, h: c.height, floor, ledges }
+}
+function petPlace() {
+  if (!petWin) return
+  const a = petArea(), p = state.pet, c = win.getContentBounds()
+  p.cx = clamp(p.cx ?? a.left + (a.w - a.left) * 0.75, 40, a.w - 40)
+  p.by = clamp(p.by ?? a.floor, 40, a.floor)
+  petWin.setBounds({ x: Math.round(c.x + p.cx - petSize.w / 2), y: Math.round(c.y + p.by - petSize.h), width: petSize.w, height: petSize.h })
+}
+function petSync() {
+  if (!petWin) return
+  if (modalOpen || peeking || covered || win.isMinimized() || win.isFullScreen()) return petWin.isVisible() && petWin.hide()
+  petPlace() // mengisi posisi awal (default) sebelum dikirim
+  const a = petArea(), key = JSON.stringify(a)
+  if (key !== petAreaSent) { petAreaSent = key; petWin.webContents.send('pet-area', a); petWin.webContents.send('pet-place', { cx: state.pet.cx, by: state.pet.by }) }
+  if (!petWin.isVisible()) petWin.showInactive()
+}
+function petOut(out) {
+  state.pet.out = out
+  render(true)
+  if (!out) return petWin?.webContents.send('pet-leave') // melambai dulu, jendela ditutup saat 'gone'
+  if (petWin || !win) return
+  petSize = { ...PET_BASE }
+  petWin = new BrowserWindow({
+    parent: win, x: 0, y: 0, ...PET_BASE, frame: false, transparent: true, hasShadow: false, focusable: false, show: false,
+    resizable: false, minimizable: false, maximizable: false, fullscreenable: false, acceptFirstMouse: true,
+    webPreferences: { preload: path.join(__dirname, 'pet-preload.js'), sandbox: true, contextIsolation: true },
+  })
+  petWin.webContents.on('will-navigate', e => e.preventDefault())
+  petWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  petWin.on('closed', () => { petWin = null; petSent = ''; petAreaSent = '' })
+  petWin.webContents.once('did-finish-load', () => {
+    petSent = ''; petAreaSent = ''
+    render(true); petSync()
+    petWin.webContents.send('pet-enter')
+  })
+  petWin.loadFile(path.join(__dirname, 'ui', 'pet.html'))
+}
+ipcMain.on('pet', (e, type, arg) => {
+  if (e.sender !== petWin?.webContents) return
+  if (type === 'pos' && Number.isFinite(arg?.cx) && Number.isFinite(arg?.by)) {
+    state.pet.cx = arg.cx; state.pet.by = arg.by
+    petPlace()
+    if (arg.save) render() // posisi bertengger disimpan
+  }
+  if (type === 'size' && Number.isFinite(arg?.w) && Number.isFinite(arg?.h)) { petSize = { w: clamp(arg.w, 80, 260), h: clamp(arg.h, 80, 200) }; petPlace() }
+  if (type === 'stats') { win.focus(); win.webContents.send('open-stats') }
+  if (type === 'gone') petWin?.close()
+})
+// tab dijatuhkan ke Almi: hanya tab yang memang sedang diseret dari sidebar Almac
+ipcMain.handle('pet-eat', e => {
+  if (e.sender !== petWin?.webContents) return null
+  const t = state.tabs.find(t => t.id === petFeedTab)
+  petFeedTab = null
+  if (!t) return null
+  state.tabsEaten = (state.tabsEaten || 0) + 1
+  setTimeout(() => { if (state.tabs.includes(t)) closeTab(t) }, 900) // ditutup setelah animasi mengunyah
+  return { title: (t.title || t.url || '').slice(0, 80), favicon: /^https:/.test(t.favicon || '') ? t.favicon : '' }
+})
+
 function buildMenu() {
   const send = ch => () => { win.webContents.focus(); win.webContents.send(ch) }
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
       label: 'Almac Browser',
       submenu: [
-        { role: 'about' }, { type: 'separator' },
+        { role: 'about' },
+        { label: 'Check for Updates…', click: () => { updater.check({ manual: true }); send('open-update')() } },
+        { type: 'separator' },
         { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('open-settings') },
         { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' },
       ],
@@ -1442,6 +1562,7 @@ function buildMenu() {
         { label: 'Previous Workspace', accelerator: 'CmdOrCtrl+Alt+Left', click: () => commands.wsStep(-1) },
         { type: 'separator' },
         { label: 'Passwords', accelerator: 'CmdOrCtrl+Shift+P', click: send('open-passwords') },
+        { label: 'Autofill Login', accelerator: 'CmdOrCtrl+Shift+L', click: () => commands.pwFillActive() },
         { label: 'Find Password in Keychain', click: () => commands.passwords() },
         { label: 'Radio Widget', accelerator: 'CmdOrCtrl+Shift+M', click: () => toggleMusic() },
         { label: 'Picture in Picture', accelerator: 'CmdOrCtrl+Alt+P', click: () => commands.pip() },
@@ -1490,6 +1611,7 @@ app.whenReady().then(async () => {
       render()
       const k = dayKey()
       state.stats[k] = (state.stats[k] || 0) + 1
+      petWin?.webContents.send('pet-eat', state.stats[k])
       if (Object.keys(state.stats).length > 60) delete state.stats[Object.keys(state.stats).sort()[0]] // simpan ~2 bulan
     })
   } catch (e) {
@@ -1509,6 +1631,7 @@ app.whenReady().then(async () => {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: false, contextIsolation: true },
   })
   win.on('resize', () => { layout(); render() }) // lebar sidebar efektif bisa berubah
+  for (const ev of ['move', 'minimize', 'restore', 'enter-full-screen', 'leave-full-screen']) win.on(ev, petSync)
   win.setWindowButtonVisibility?.(state.sidebar.mode === 'pinned') // tombol jendela macOS ikut sidebar
   win.on('closed', () => { win = null; clearTimeout(renderTimer) })
   // geser 3 jari (macOS: Trackpad > More Gestures > Swipe between pages = 3 jari) di atas panel tab -> ganti workspace
@@ -1517,6 +1640,9 @@ app.whenReady().then(async () => {
     const cursorX = screen.getCursorScreenPoint().x - win.getContentBounds().x
     if (cursorX < sideSpace() + GAP || peeking) commands.wsStep(dir === 'left' ? 1 : -1) // hanya saat kursor di sidebar
   })
+  updater = createUpdater({ app, onChange: () => render(true) })
+  setTimeout(() => updater.check(), 15000) // cek diam-diam: hanya memberi tahu kalau ada versi baru
+  setInterval(() => updater.check(), 6 * 3600000)
   buildMenu()
   for (const ev of ['lock-screen', 'suspend']) powerMonitor.on(ev, pwLock) // layar dikunci / sleep -> brankas dikunci
   // jendela UI punya preload (window.almac): jangan pernah memuat situs luar di sini (mis. link di-drag ke sidebar)
@@ -1525,6 +1651,7 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(__dirname, 'ui', 'index.html'))
   commands.switchProfile(state.activeProfile)
   if (state.music?.on) toggleMusic()
+  if (state.pet.out) petOut(true)
 
   setInterval(() => {
     if (!win) return
