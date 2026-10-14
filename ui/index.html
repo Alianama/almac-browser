@@ -28,6 +28,7 @@
       <div class="label"><span>Extensions</span><button class="mini" data-close-panel title="Close" data-icon="x"></button></div>
       <div id="extList"></div>
       <button class="store" data-cmd="webStore"><span data-icon="plus"></span>Chrome Web Store</button>
+      <button class="store" data-cmd="extLoadUnpacked" title="Developer mode: load an extension from a folder with manifest.json"><span data-icon="folderOpen"></span>Load unpacked</button>
     </section>
 
     <section class="ext-card glass" id="historyPanel" hidden>
@@ -78,6 +79,11 @@
     <button type="button" class="mini" id="findClose" title="Close (Esc)" data-icon="x"></button>
   </div>
   <div id="toast" hidden></div>
+  <div id="glance" hidden><div id="glanceSnap" class="snaps"></div><div id="glanceFrame"></div>
+    <div id="glanceBar" class="glass"><span class="g-meta"><b id="glanceTitle"></b><small id="glanceHost"></small></span>
+      <button type="button" class="mini" data-cmd="glanceCopy" title="Copy link" data-icon="copy"></button>
+      <button type="button" class="mini" data-cmd="glanceExpand" title="Open as tab (⌘↩)" data-icon="external"></button>
+      <button type="button" class="mini" data-cmd="glanceClose" title="Close (Esc)" data-icon="x"></button></div></div>
   <nav id="bmbar"><button type="button" id="bmAll" class="bm-item bm-icon" title="All bookmarks (⌘⌥B)" data-icon="grid"></button><span class="bm-sep"></span><div id="bmItems"></div><button type="button" id="bmMore" class="bm-item bm-icon" title="Other bookmarks" data-icon="more" hidden></button></nav>
   <div id="overlay" hidden><div id="snap" class="snaps"></div></div>
   <div id="frame">
@@ -99,6 +105,7 @@
         </form>
         <div id="startSuggest" class="suggest glass" hidden></div>
       </div>
+      <p class="priv-note" id="privNote" hidden>You've gone private. Almac won't save your browsing history, cookies and site data, or info entered in forms. Extensions are off. Downloads stay in your Downloads folder. Your activity might still be visible to the websites you visit, your employer or school, and your internet provider.</p>
       <p class="start-hint"><kbd>⌘K</kbd> command palette · <kbd>⌘T</kbd> new tab · <kbd>⌘⇧T</kbd> reopen tab · <kbd>⌘,</kbd> settings</p>
     </div>
   </div>
@@ -196,6 +203,67 @@ document.querySelectorAll('[data-close-panel]').forEach(b => b.addEventListener(
 almac.onToggleHistory(() => { libTab = 'history'; togglePanel('history') })
 almac.onToggleBookmarks(() => { libTab = 'bookmarks'; togglePanel('history') })
 almac.onOpenImport(() => openImport())
+// ---- Glance: latar = snapshot tab (diburamkan), kotak halaman = native view dari main; UI menggambar bingkai & toolbar ----
+almac.onGlance(g => {
+  const box = $('#glance')
+  box.hidden = !g
+  if (!g) return $('#glanceSnap').replaceChildren()
+  if (g.open) paintSnaps($('#glanceSnap'), g.snap)
+  const b = g.bounds
+  Object.assign($('#glanceFrame').style, { left: b.x + 'px', top: b.y + 'px', width: b.width + 'px', height: b.height + 'px' })
+  Object.assign($('#glanceBar').style, { left: b.x + 'px', top: b.y - g.bar + 'px', width: b.width + 'px', height: g.bar - 6 + 'px' })
+  $('#glanceTitle').textContent = g.title || host(g.url)
+  $('#glanceHost').textContent = host(g.url)
+})
+$('#glance').addEventListener('mousedown', e => { if (!e.target.closest('#glanceBar')) almac.cmd('glanceClose') })
+
+// ---- lembar shortcut (⌘/): daftar dari menu app + gestur, bisa dicari ----
+async function openShortcuts() {
+  const sections = await almac.ask('shortcuts')
+  const search = el('input', { className: 'field', placeholder: 'Search shortcuts…', spellcheck: false })
+  const body = el('div', { className: 'keys-cols' }) // kolom di dalam area scroll (kolom CSS dengan tinggi terbatas meluber ke samping)
+  const draw = () => {
+    const q = search.value.trim().toLowerCase()
+    body.replaceChildren(...sections.map(sec => {
+      const items = sec.items.filter(it => !q || (sec.title + ' ' + it.label + ' ' + it.keys.join(' ')).toLowerCase().includes(q))
+      return items.length ? el('section', { className: 'keys-sec' }, el('h3', { className: 'pixel', textContent: sec.title }),
+        ...items.map(it => el('div', { className: 'keys-row' }, el('span', { textContent: it.label }),
+          el('span', { className: 'keys' }, ...it.keys.map(k => el('kbd', { textContent: k })))))) : ''
+    }))
+    if (!body.children.length || [...body.children].every(c => !c.tagName)) body.replaceChildren(el('p', { className: 'none', textContent: 'No shortcut found.' }))
+  }
+  search.oninput = draw
+  draw()
+  openModal('Keyboard Shortcuts', [search, el('div', { className: 'keys-list' }, body)], [{ label: 'Close', primary: true }])
+}
+almac.onOpenShortcuts(() => openShortcuts())
+
+// ---- Boosts: CSS & JS sendiri per situs ----
+async function openBoost() {
+  const b = await almac.ask('boostGet')
+  if (!b) return toast('Boosts work on websites only', 'warn')
+  const on = el('input', { type: 'checkbox', checked: b.on })
+  const css = el('textarea', { className: 'field code', value: b.css, spellcheck: false, placeholder: '/* CSS for ' + b.host + ', e.g. */\n.ads, #sidebar { display: none !important; }' })
+  const js = el('textarea', { className: 'field code', value: b.js, spellcheck: false, placeholder: '// JavaScript, runs after every page load\ndocument.title = "☕ " + document.title' })
+  openModal('Boost · ' + b.host, [
+    el('p', { className: 'modal-text', textContent: 'Your own CSS and JavaScript for this site, applied every time it loads. Zap hides an element with one click.' }),
+    el('label', { className: 'check' }, on, el('span', { textContent: 'Boost on' })),
+    el('label', { className: 'row' }, el('span', { textContent: 'CSS' }), css),
+    el('label', { className: 'row' }, el('span', { textContent: 'JavaScript' }), js),
+  ], [
+    { label: 'Zap element', onClick: () => setTimeout(() => almac.cmd('boostZap'), 250) },
+    { label: 'Cancel' },
+    { label: 'Save', primary: true, onClick: () => almac.cmd('boostSave', { host: b.host, css: css.value, js: js.value, on: on.checked }) },
+  ])
+}
+almac.onOpenBoost(() => openBoost())
+
+// chrome://settings, chrome://history, ... di kolom alamat -> panel Almac yang setara
+almac.onChromePage(page => ({
+  settings: () => openSettings(), passwords: () => openPasswords(), version: () => openUpdate(), about: () => openUpdate(),
+  history: () => { libTab = 'history'; showPanel('history') }, bookmarks: () => { libTab = 'bookmarks'; showPanel('history') },
+  downloads: () => { libTab = 'downloads'; showPanel('history') }, extensions: () => showPanel('ext'),
+})[page]?.())
 
 // ---- history ----
 const dayLabel = d => {
@@ -417,7 +485,7 @@ function closeModal() {
   cb?.()
 }
 $('#overlay').addEventListener('mousedown', e => { if (e.target.id === 'overlay' || e.target.closest('#snap')) closeModal() })
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (modalOpen) closeModal(); closeCtx() } })
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (modalOpen) closeModal(); else if (!$('#glance').hidden) almac.cmd('glanceClose'); closeCtx() } })
 
 // screenshot halaman (1-2 panel) ditempatkan persis di posisi aslinya
 const paintSnaps = (box, shots) => {
@@ -1093,6 +1161,7 @@ almac.onState(s => {
   const isPrivate = !!s.profiles.find(p => p.id === s.activeProfile)?.ephemeral
   document.body.classList.toggle('private', isPrivate)
   $('#privBadge').hidden = !isPrivate
+  $('#privNote').hidden = !isPrivate
   $('#starBtn').hidden = isPrivate
   $('#zoomBtn').hidden = s.zoom === 100
   $('#zoomBtn').textContent = s.zoom + '%'
@@ -1140,8 +1209,8 @@ almac.onState(s => {
   }
 
   // bangun ulang daftar hanya kalau berubah (angka blokir sering berubah -> jangan bikin tab berkedip)
-  const tabsKey = JSON.stringify(s.tabs)
-  if (tabsKey !== lastTabs) { lastTabs = tabsKey; renderTabs(s.tabs) }
+  const tabsKey = JSON.stringify([s.tabs, s.tabGroups])
+  if (tabsKey !== lastTabs) { lastTabs = tabsKey; renderTabs(s.tabs, s.tabGroups) }
   const extKey = JSON.stringify([s.extensions, s.activeProfile])
   if (extKey !== lastExt) { lastExt = extKey; renderExtensions(s) }
   const profilesKey = JSON.stringify([s.profiles, s.activeProfile])
@@ -1164,6 +1233,23 @@ actionsEl.addEventListener('wheel', e => {
   actionsEl.scrollLeft -= e.deltaY // roda mouse vertikal -> geser samping (rtl: scroll ke bawah = ke kiri)
 }, { passive: false })
 addEventListener('resize', updateActionsFade)
+
+// jalankan ekstensi (popup / aksi). Library ekstensi butuh halaman web di tab aktif: di halaman awal Almac
+// (tab kosong) klik dulu gagal diam-diam ("Unable to get active tab") -> beri tahu user
+function runExt(id, r) {
+  if (!lastState?.url) return toast('Open a website first: extensions work on the page in the current tab', 'ext')
+  browserAction.activate('persist:' + lastState.activeProfile, {
+    eventType: 'click', extensionId: id, tabId: -1, alignment: 'bottom right',
+    anchorRect: { x: r.left, y: r.top, width: r.width, height: r.height },
+  }).catch(e => toast('Extension could not open: ' + e.message.replace(/^.*Error: /, ''), 'warn'))
+}
+// ikon di toolbar juga lewat runExt (capture di host: jalan sebelum handler klik bawaan library)
+actionsEl.addEventListener('click', e => {
+  const b = e.composedPath().find(n => n.classList?.contains('action'))
+  if (!b) return
+  e.stopImmediatePropagation()
+  runExt(b.id, b.getBoundingClientRect())
+}, true)
 
 function renderExtensions(s) {
   // toolbar: sembunyikan ikon ekstensi yang tidak di-pin (shadow DOM terbuka)
@@ -1191,18 +1277,13 @@ function renderExtensions(s) {
     const run = el('button', {
       type: 'button', className: 'ext-run', disabled: !e.enabled,
       title: e.enabled ? 'Click to run ' + e.name : 'Enable it first to use',
-      onclick() {
-        const r = this.getBoundingClientRect()
-        browserAction.activate('persist:' + s.activeProfile, {
-          eventType: 'click', extensionId: e.id, tabId: -1, alignment: 'bottom right',
-          anchorRect: { x: r.left, y: r.top, width: r.width, height: r.height },
-        })
-      },
-    }, icon, el('div', { className: 'meta' }, el('b', { textContent: e.name }), el('small', { textContent: e.enabled ? 'v' + e.version + ' · click to open' : 'v' + e.version + ' · disabled' })))
+      onclick() { runExt(e.id, this.getBoundingClientRect()) },
+    }, icon, el('div', { className: 'meta' }, el('b', { textContent: e.name }), el('small', { textContent: 'v' + e.version + (e.unpacked ? ' · unpacked' : '') + (e.enabled ? ' · click to open' : ' · disabled') })))
     return el('div', { className: 'ext' + (e.enabled ? '' : ' off') },
       run,
       e.enabled ? btn('pin', e.pinned ? 'Unpin from toolbar' : 'Pin to toolbar', () => almac.cmd('extPin', e.id), e.pinned ? 'on' : '') : '',
       e.options ? btn('gear', 'Options', () => almac.cmd('extOptions', e.id)) : '',
+      e.unpacked && e.enabled ? btn('retry', 'Reload from folder', () => almac.cmd('extReload', e.id)) : '',
       btn('trash', 'Remove', async () => { if (await confirmModal('Remove extension', `"${e.name}" will be uninstalled from this profile.`, 'Remove')) almac.cmd('extRemove', e.id) }, 'danger'),
       sw)
   }) : [el('p', { className: 'none', textContent: 'No extensions yet. Install them from the Chrome Web Store.' })]))
@@ -1223,23 +1304,59 @@ function pinnedTile(t) {
         { icon: 'x', label: 'Close pinned tab', danger: true, onClick: () => almac.cmd('closePinned', t.id) },
       ])
     },
-  }, t.favicon ? el('img', { src: t.favicon, alt: '', onerror() { this.replaceWith(el('b', { textContent: (t.title || '?')[0].toUpperCase() })) } }) : el('b', { textContent: (t.title || '?')[0].toUpperCase() }))
+  }, t.favicon ? el('img', { src: t.favicon, alt: '', onerror() { this.replaceWith(el('b', { textContent: (t.title || '?')[0].toUpperCase() })) } }) : el('b', { textContent: (t.title || '?')[0].toUpperCase() }), ...countBadge(t))
   return tile
 }
-function renderTabs(tabs) {
+// counter notifikasi situs (Gmail, WhatsApp, ...) di tab-nya; -1 = ada yang baru tanpa angka
+const countBadge = t => t.count ? [el('b', { className: 'count pixel', textContent: t.count < 0 ? '' : t.count > 99 ? '99+' : t.count })] : []
+// grup tab: judul berwarna (klik = buka/tutup), anggota di bawahnya dengan garis warna grup
+const groupName = (g, n) => g.name || `${n} ${n === 1 ? 'tab' : 'tabs'}`
+function groupHead(gid, g, members) {
+  const next = WS_COLORS.filter(Boolean)[(WS_COLORS.filter(Boolean).indexOf(g.color) + 1) % (WS_COLORS.length - 1)]
+  return el('div', {
+    className: 'tg-head' + (g.collapsed ? ' collapsed' : ''), style: '--gc:' + g.color, title: g.collapsed ? 'Expand group' : 'Collapse group',
+    onclick: () => almac.cmd('tgUpdate', { gid, collapsed: !g.collapsed }),
+    oncontextmenu: e => {
+      e.preventDefault()
+      ctxMenu(e.clientX, e.clientY, [
+        { icon: 'edit', label: 'Rename group', onClick: async () => { const v = await promptModal('Rename group', 'Name', g.name); if (v !== null) almac.cmd('tgUpdate', { gid, name: v }) } },
+        { icon: 'palette', label: 'Change color', onClick: () => almac.cmd('tgUpdate', { gid, color: next }) },
+        '-',
+        { icon: 'layers', label: 'Ungroup', onClick: () => almac.cmd('tgUngroup', gid) },
+        { icon: 'x', label: 'Close group', danger: true, onClick: () => almac.cmd('tgClose', gid) },
+      ])
+    },
+  }, el('i', { className: 'tg-dot' }), el('span', { textContent: groupName(g, members.length) }), el('small', { textContent: g.collapsed ? members.length : '' }), iconEl('chevron'))
+}
+function renderTabs(tabs, groups = {}) {
   const pinned = tabs.filter(t => t.pinned)
   tabs = tabs.filter(t => !t.pinned)
-  $('#tabs').replaceChildren(...(pinned.length ? [el('div', { className: 'pin-grid' }, ...pinned.map(pinnedTile))] : []), ...tabs.map(t => {
+  const rows = [], done = new Set()
+  for (const t of tabs) {
+    const g = t.tg && groups[t.tg]
+    if (!g) { rows.push(tabRow(t)); continue }
+    if (done.has(t.tg)) continue
+    done.add(t.tg)
+    const members = tabs.filter(x => x.tg === t.tg)
+    rows.push(groupHead(t.tg, g, members), ...members.filter(m => !g.collapsed || m.active).map(m => tabRow(m, g)))
+  }
+  $('#tabs').replaceChildren(...(pinned.length ? [el('div', { className: 'pin-grid' }, ...pinned.map(pinnedTile))] : []), ...rows)
+  ;[...pinned, ...tabs].forEach(t => seen.add(t.id))
+
+  function tabRow(t, g) {
     const fav = el('div', { className: 'fav' }, t.favicon
       ? el('img', { src: t.favicon, onerror() { this.replaceWith(el('i')) } })
       : el('i'))
     const x = el('button', { className: 'x', title: 'Close (⌘W)', onclick: e => { e.stopPropagation(); almac.cmd('close', t.id) } }, iconEl('x'))
+    const audio = t.audible || t.muted ? [el('button', { className: 'audio' + (t.muted ? ' muted' : ''), title: t.muted ? 'Unmute tab' : 'Mute tab', onclick: e => { e.stopPropagation(); almac.cmd('muteTab', t.id) } }, iconEl(t.muted ? 'volume-x' : 'volume-2'))] : []
+    const otherGroups = Object.entries(groups).filter(([gid]) => gid !== t.tg && tabs.some(x => x.tg === gid))
     return el('div', {
+      ...(g && { style: '--gc:' + g.color }),
       draggable: true,
       // seret tab ke Almi untuk menutupnya (dia memakannya)
       ondragstart: e => { e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; almac.cmd('petFeed', t.id) },
       ondragend: () => almac.cmd('petFeedEnd'),
-      className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (seen.has(t.id) ? '' : ' new'),
+      className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (g ? ' in-group' : '') + (seen.has(t.id) ? '' : ' new'),
       title: t.sleeping ? t.url + '\n(sleeping, saving RAM)' : t.url,
       onclick: () => almac.cmd('select', t.id),
       oncontextmenu: e => {
@@ -1250,6 +1367,10 @@ function renderTabs(tabs) {
           ...(others.length ? ['-'] : []),
           { icon: 'pin', label: 'Pin tab (⌘⇧D)', disabled: !t.url, onClick: () => almac.cmd('pinTab', t.id) },
           { icon: 'copy', label: 'Copy URL', onClick: () => almac.cmd('copyUrl', t.id) },
+          { icon: t.muted ? 'volume-2' : 'volume-x', label: t.muted ? 'Unmute tab' : 'Mute tab', disabled: t.sleeping, onClick: () => almac.cmd('muteTab', t.id) },
+          '-',
+          t.tg ? { icon: 'layers', label: 'Remove from group', onClick: () => almac.cmd('tgRemove', t.id) } : { icon: 'layers', label: 'Add tab to new group', onClick: () => almac.cmd('tgNew', t.id) },
+          ...otherGroups.map(([gid, og]) => ({ icon: 'layers', label: 'Add to group: ' + groupName(og, tabs.filter(x => x.tg === gid).length), onClick: () => almac.cmd('tgAdd', { id: t.id, gid }) })),
           '-',
           ...(t.split
             ? [{ icon: 'split', label: 'Exit split view', onClick: () => almac.cmd('unsplit', t.id) }]
@@ -1262,9 +1383,8 @@ function renderTabs(tabs) {
           { icon: 'x', label: 'Close tab', danger: true, onClick: () => almac.cmd('close', t.id) },
         ])
       },
-    }, fav, el('span', { textContent: t.title }), ...(t.split ? [el('span', { className: 'split-mark', title: 'Split view' }, iconEl('split'))] : []), ...(t.sleeping ? [el('em', { className: 'zz', textContent: 'zz' })] : []), x)
-  }))
-  ;[...pinned, ...tabs].forEach(t => seen.add(t.id))
+    }, fav, el('span', { textContent: t.title }), ...countBadge(t), ...audio, ...(t.split ? [el('span', { className: 'split-mark', title: 'Split view' }, iconEl('split'))] : []), ...(t.sleeping ? [el('em', { className: 'zz', textContent: 'zz' })] : []), x)
+  }
 }
 
 function editProfile(p) {
@@ -1544,7 +1664,7 @@ function openSettings(initialTab = 'general') {
   ], [{ label: 'Done', primary: true }])
 }
 $('#settingsBtn').addEventListener('click', () => openSettings())
-almac.onOpenSettings(() => openSettings())
+almac.onOpenSettings(tab => openSettings(tab))
 
 // ---- halaman awal Almac (tidak ada tab / tab baru) ----
 $('#startForm').addEventListener('submit', e => e.preventDefault()) // Enter ditangani attachSuggest
@@ -1591,7 +1711,7 @@ const PALETTE_CMDS = [
   ['New tab', 'plus', () => almac.cmd('newTab'), '⌘T'],
   ['Reopen closed tab', 'retry', () => almac.cmd('reopenTab'), '⌘⇧T'],
   ['Pin / unpin tab', 'pin', () => almac.cmd('pinTab'), '⌘⇧D'],
-  ['New private tab', 'private', () => almac.cmd('openPrivate'), '⌘⇧N'],
+  ['New private (incognito) tab', 'private', () => almac.cmd('openPrivate'), '⌘⇧N'],
   ['Picture in picture', 'tv', () => almac.cmd('pip'), '⌘⌥P'],
   ['Start focus (25 min)', 'target', () => almac.cmd('focusStart', 25)],
   ['Stop focus', 'cancel', () => almac.cmd('focusStop')],
@@ -1601,7 +1721,22 @@ const PALETTE_CMDS = [
   ['History', 'clock', () => { libTab = 'history'; showPanel('history') }, '⌘Y'],
   ['Bookmarks', 'star', () => { libTab = 'bookmarks'; showPanel('history') }, '⌘⌥B'],
   ['Downloads', 'file', () => { libTab = 'downloads'; showPanel('history') }, '⌘⇧J'],
-  ['Toggle sidebar', 'split', () => almac.cmd('sidebarToggle'), '⌘S'],
+  ['Toggle sidebar', 'split', () => almac.cmd('sidebarToggle'), '⌘⇧S'],
+  ['Keyboard shortcuts', 'keyboard', () => setTimeout(openShortcuts, 80), '⌘/'],
+  ['Reader mode', 'book-open', () => almac.cmd('reader'), '⌘⌥R'],
+  ['Translate page', 'languages', () => almac.cmd('translate')],
+  ['Boost this site', 'rocket', () => setTimeout(openBoost, 80), '⌘⌥K'],
+  ['Zap element', 'mouse-pointer-click', () => almac.cmd('boostZap'), '⌘⌥Z'],
+  ['Mute / unmute tab', 'volume-x', () => almac.cmd('muteTab')],
+  ['Save page as', 'save', () => almac.cmd('savePage'), '⌘S'],
+  ['Print', 'file', () => almac.cmd('print'), '⌘P'],
+  ['Developer tools', 'code', () => almac.cmd('devtools'), '⌘⌥I'],
+  ['JavaScript console', 'terminal', () => almac.cmd('devConsole'), '⌘⌥J'],
+  ['Inspect element', 'code', () => almac.cmd('devInspect'), '⌘⌥C'],
+  ['View page source', 'code', () => almac.cmd('viewSource'), '⌘⌥U'],
+  ['Load unpacked extension', 'folderOpen', () => almac.cmd('extLoadUnpacked')],
+  ['Back up data', 'archive', () => almac.cmd('backup')],
+  ['Restore backup', 'upload', () => almac.cmd('restore')],
   ['Toggle bookmark bar', 'bookmark', () => almac.cmd('bookmarkBarToggle'), '⌘⇧B'],
   ['Change theme', 'dark', () => almac.cmd('theme')],
   ['Radio widget', 'radio', () => almac.cmd('music'), '⌘⇧M'],

@@ -1,0 +1,120 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Almac Quick Search</title>
+  <link rel="stylesheet" href="../node_modules/@fontsource/silkscreen/index.css">
+  <link rel="stylesheet" href="theme.css">
+  <style>
+    /* jendela ⌥Space: jendela transparan, kotak digambar sendiri -> sudut bertangga pixel art, border tebal & bayangan pixel
+       (sudut bulat bawaan macOS memotong border, jadi tidak dipakai) */
+    html, body { height: auto; background: transparent !important; overflow: hidden; }
+    :root {
+      --s: 4px; /* satu "pixel" sudut */
+      --pb3: 0 -3px 0 var(--border), 0 3px 0 var(--border), -3px 0 0 var(--border), 3px 0 0 var(--border); /* border pixel: pojok bertangga tanpa clip */
+      --px: polygon(0 calc(var(--s) * 2), var(--s) calc(var(--s) * 2), var(--s) var(--s), calc(var(--s) * 2) var(--s), calc(var(--s) * 2) 0,
+        calc(100% - var(--s) * 2) 0, calc(100% - var(--s) * 2) var(--s), calc(100% - var(--s)) var(--s), calc(100% - var(--s)) calc(var(--s) * 2), 100% calc(var(--s) * 2),
+        100% calc(100% - var(--s) * 2), calc(100% - var(--s)) calc(100% - var(--s) * 2), calc(100% - var(--s)) calc(100% - var(--s)), calc(100% - var(--s) * 2) calc(100% - var(--s)), calc(100% - var(--s) * 2) 100%,
+        calc(var(--s) * 2) 100%, calc(var(--s) * 2) calc(100% - var(--s)), var(--s) calc(100% - var(--s)), var(--s) calc(100% - var(--s) * 2), 0 calc(100% - var(--s) * 2));
+    }
+    #spWrap { position: relative; margin: 0 8px 8px 0; } /* ruang untuk bayangan pixel */
+    #spWrap::before { content: ''; position: absolute; inset: 8px -8px -8px 8px; background: var(--shadow); clip-path: var(--px); opacity: .9; } /* bayangan pixel */
+    #spFrame { position: relative; padding: 3px; background: var(--border); clip-path: var(--px); }
+    #spBox {
+      position: relative; clip-path: var(--px); overflow: hidden;
+      background:
+        radial-gradient(360px 160px at 0% 0%, var(--glow-1), transparent 70%),
+        radial-gradient(360px 200px at 100% 100%, var(--glow-2), transparent 70%),
+        linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 12px 12px,
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 12px 12px,
+        color-mix(in srgb, var(--glass-strong) 94%, transparent);
+    }
+    /* strip judul ala jendela retro */
+    .sp-title { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 10px; background: var(--accent); color: #111; border-bottom: 3px solid var(--border);
+      font: 9px var(--font-pixel); letter-spacing: 1px; }
+    .sp-title i { width: 8px; height: 8px; background: #111; flex: none; box-shadow: inset -2px -2px 0 rgba(255, 255, 255, .35); }
+    .sp-title i:nth-child(2) { background: #ffc93c; } .sp-title i:nth-child(3) { background: #ff6b7a; }
+    .sp-title span:not(.sp-stripes) { flex: none; }
+    .sp-title .sp-stripes { flex: 1; height: 8px; background: repeating-linear-gradient(90deg, #111 0 2px, transparent 2px 4px); opacity: .35; }
+    .sp-top { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px; }
+    .sp-top img { width: 28px; height: 28px; image-rendering: pixelated; flex: none; }
+    .sp-field { flex: 1; min-width: 0; display: flex; align-items: center; height: 40px; margin: 3px; padding: 0 12px; background: var(--field); box-shadow: var(--pb3), inset 3px 3px 0 color-mix(in srgb, var(--shadow) 18%, transparent); }
+    #q { flex: 1; min-width: 0; font: 400 19px/1 var(--font-ui); color: var(--text); background: none; border: 0; outline: none; caret-color: var(--accent); }
+    #q::placeholder { color: var(--muted); }
+    .sp-chip { flex: none; margin: 3px; font: 9px var(--font-pixel); padding: 7px 8px; background: var(--accent); color: #111; box-shadow: var(--pb3), 3px 6px 0 var(--shadow), 6px 3px 0 var(--shadow); }
+    #spList { display: flex; flex-direction: column; gap: 2px; padding: 4px 19px 12px 13px; /* kanan lebih lebar: ruang bayangan baris terpilih */ }
+    #spList:empty { display: none; }
+    .sp-row { display: flex; align-items: center; gap: 10px; height: 38px; margin: 3px 0; padding: 0 10px 0 6px; cursor: pointer; } /* margin sama untuk semua baris: tidak bergeser saat sorotan pindah */
+    .sp-row.sp-sel { background: var(--active); box-shadow: var(--pb3), 3px 6px 0 var(--shadow), 6px 3px 0 var(--shadow); }
+    /* ikon dalam ubin pixel berwarna per jenis */
+    .sp-ic { width: 24px; height: 24px; margin: 2px; flex: none; display: grid; place-items: center; color: #111; background: var(--k); box-shadow: 0 -2px 0 var(--border), 0 2px 0 var(--border), -2px 0 0 var(--border), 2px 0 0 var(--border); }
+    .sp-ic svg { width: 15px; height: 15px; }
+    .k-search { --k: #a7f070; } .k-tab { --k: #41a6f6; } .k-star { --k: #ffc93c; } .k-history { --k: #b07cff; }
+    .sp-row b { flex: 1; min-width: 0; font-weight: 500; font-size: 14px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .sp-row small { flex: none; max-width: 42%; color: var(--muted); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .sp-row .sp-go { display: none; font: 8px var(--font-pixel); padding: 4px 6px; margin: 2px; background: var(--accent); color: #111; box-shadow: 0 -2px 0 var(--border), 0 2px 0 var(--border), -2px 0 0 var(--border), 2px 0 0 var(--border); }
+    .sp-row.sp-sel .sp-go { display: block; }
+    .sp-row.sp-sel small { color: var(--text); opacity: .7; }
+    .sp-foot { display: flex; align-items: center; gap: 14px; padding: 7px 12px 8px; font: 8px var(--font-pixel); letter-spacing: .5px; color: var(--muted); border-top: 3px solid var(--border); background: color-mix(in srgb, var(--field) 70%, transparent); }
+    .sp-foot .sp-grow { flex: 1; }
+    .sp-foot kbd { font: inherit; padding: 2px 4px; margin: 0 5px 0 2px; color: var(--text); background: var(--glass-strong); box-shadow: 0 -2px 0 var(--border), 0 2px 0 var(--border), -2px 0 0 var(--border), 2px 0 0 var(--border), 2px 4px 0 var(--shadow), 4px 2px 0 var(--shadow); }
+  </style>
+</head>
+<body>
+  <div id="spWrap"><div id="spFrame"><div id="spBox">
+    <div class="sp-title"><i></i><i></i><i></i><span class="sp-stripes"></span><span>QUICK SEARCH</span><span class="sp-stripes"></span></div>
+    <div class="sp-top"><img src="logo.svg" alt=""><div class="sp-field"><input id="q" placeholder="Search or enter a URL" autocomplete="off" spellcheck="false" autofocus></div><span class="sp-chip" id="engine">GOOGLE</span></div>
+    <div id="spList"></div>
+    <div class="sp-foot"><span>ALMAC ⌥SPACE</span><span class="sp-grow"></span><span><kbd>↩</kbd>open</span><span><kbd>↑↓</kbd>select</span><span><kbd>esc</kbd>close</span></div>
+  </div></div></div>
+  <script src="icons.js"></script>
+  <script>
+    const $ = s => document.querySelector(s)
+    const q = $('#q'), list = $('#spList')
+    let items = [], sel = 0, seq = 0
+    const host = u => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
+    const looksUrl = v => /^[a-z]+:\/\//i.test(v) || /^[^\s]+\.[^\s]{2,}$/.test(v) || v.startsWith('localhost')
+    const KIND = { search: 'k-search', globe: 'k-search', 'app-window': 'k-tab', star: 'k-star', history: 'k-history' }
+    const icon = n => { const s = document.createElement('span'); s.className = 'sp-ic ' + (KIND[n] || 'k-search'); s.innerHTML = window.ALMAC_ICONS?.[n]?.s || ''; return s }
+    const text = (tag, t) => Object.assign(document.createElement(tag), { textContent: t || '' })
+    function draw() {
+      list.replaceChildren(...items.map((it, i) => {
+        const r = document.createElement('div')
+        r.className = 'sp-row' + (i === sel ? ' sp-sel' : '')
+        r.append(icon(it.icon), text('b', it.text), text('small', it.sub), Object.assign(text('span', '↩ ENTER'), { className: 'sp-go' }))
+        r.onmousemove = () => { if (sel !== i) { sel = i; draw() } }
+        r.onmousedown = e => { e.preventDefault(); spot.go(it.go) }
+        return r
+      }))
+      spot.size($('#spWrap').offsetHeight + 8)
+    }
+    async function update() {
+      const v = q.value.trim(), my = ++seq
+      if (!v) { items = []; return draw() }
+      const r = await spot.suggest(v)
+      if (my !== seq) return // ketikan sudah berubah
+      $('#engine').textContent = r.engine
+      items = [
+        { icon: looksUrl(v) ? 'globe' : 'search', text: v, sub: looksUrl(v) ? 'Open' : 'Search ' + r.engine, go: { text: v } },
+        ...r.tabs.map(t => ({ icon: 'app-window', text: t.title, sub: 'Switch to tab · ' + host(t.url), go: { tabId: t.id } })),
+        ...r.bookmarks.map(b => ({ icon: 'star', text: b.title || b.url, sub: host(b.url), go: { text: b.url } })),
+        ...r.history.map(h => ({ icon: 'history', text: h.title || h.url, sub: host(h.url), go: { text: h.url } })),
+        ...r.search.map(s => ({ icon: 'search', text: s, sub: '', go: { text: s } })),
+      ].slice(0, 9)
+      sel = 0
+      draw()
+    }
+    q.addEventListener('input', update)
+    q.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (items.length) { sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; draw() }
+      }
+      if (e.key === 'Enter') { e.preventDefault(); const v = q.value.trim(); if (v) spot.go(items[sel]?.go || { text: v }) }
+      if (e.key === 'Escape') spot.close()
+    })
+    spot.onOpen(() => { q.value = ''; items = []; draw(); q.focus() })
+    draw()
+  </script>
+</body>
+</html>

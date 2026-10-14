@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.3.4-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.3.5-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
@@ -72,6 +72,7 @@
 - Full **Chrome Extension (MV2 & MV3)** support via `electron-chrome-extensions`
 - Install extensions directly from **Chrome Web Store**
 - Pin/unpin extensions to toolbar
+- **Developer mode** — load an unpacked extension from a folder, reload it after edits
 - Per-profile extension isolation
 
 ### 📚 Browsing
@@ -80,6 +81,15 @@
 - **Downloads manager** with pause / resume / cancel
 - **Import** bookmarks & history from Chrome, Brave, Edge, Arc, Vivaldi
 - **Split view** — browse two pages side by side
+- **Tab groups** — named, colored, collapsible groups (right-click a tab)
+- **Glance** (like Zen / Arc Peek) — ⌥-click a link to preview it in a floating window; Esc closes, ⌘↩ opens it as a tab
+- **Boosts** (like Arc) — your own CSS & JavaScript per site (⌘⌥K), and **Zap** (⌘⌥Z) to hide any element with one click
+- **Quick Search (⌥Space)** — Spotlight-style pixel + glass search window from anywhere on your Mac: open tabs, bookmarks, history and search suggestions
+- **Notification counters on tabs** — unread counts from Gmail, WhatsApp, etc. show on their tab, not on the Dock icon
+- **Tab audio** — speaker icon on tabs playing sound, click to mute
+- **Reader mode** (⌘⌥R) and **Translate page** (Google Translate)
+- **Chrome-style right-click menu** — open link in new/private tab, copy/save image, search selection, spelling suggestions, view source, inspect
+- **Back up / restore** tabs, bookmarks, history, settings and the (encrypted) password vault — File menu
 
 ### 🔍 Smart URL Bar
 - Combined search + address bar with **OpenSearch suggestions**
@@ -127,8 +137,43 @@ npm start
 
 ## ⌨️ Keyboard Shortcuts
 
+Same as Chrome on macOS wherever possible. In the app, open **Help › Keyboard Shortcuts** (`⌘/`) for the full, searchable list.
+
 | Action | Shortcut |
 |--------|----------|
+| New Tab | `⌘T` / `⌘N` |
+| Close Tab | `⌘W` |
+| Reopen Closed Tab | `⌘⇧T` |
+| New Private (Incognito) Tab | `⌘⇧N` |
+| Next / Previous Tab | `⌘⌥→` / `⌘⌥←`, `⌃Tab` / `⌃⇧Tab`, `⌘⇧]` / `⌘⇧[` |
+| Jump to Tab 1–8 / Last Tab | `⌘1`–`⌘8` / `⌘9` |
+| Search Tabs / Command Palette | `⌘⇧A` / `⌘K` |
+| Focus Address Bar | `⌘L` |
+| Reload / Force Reload | `⌘R` / `⌘⇧R` |
+| Find in Page | `⌘F` |
+| Save Page As / Print | `⌘S` / `⌘P` |
+| Bookmark Page | `⌘D` |
+| Bookmark Manager | `⌘⌥B` |
+| History / Downloads | `⌘Y` / `⌘⇧J` |
+| Clear Browsing Data | `⌘⇧⌫` |
+| Settings | `⌘,` |
+| Toggle Bookmark Bar | `⌘⇧B` |
+| Toggle Sidebar | `⌘⇧S` |
+| Zoom In / Out / Reset | `⌘+` / `⌘-` / `⌘0` |
+| Reader Mode | `⌘⌥R` |
+| Quick Search (from any app) | `⌥Space` |
+| Glance a link | `⌥`-click |
+| Boost This Site / Zap Element | `⌘⌥K` / `⌘⌥Z` |
+| Next / Previous Workspace | `⌃⌘→` / `⌃⌘←` |
+| Passwords | `⌘⇧P` |
+| Developer Tools | `⌘⌥I` / `F12` |
+| JavaScript Console | `⌘⌥J` |
+| Inspect Element | `⌘⌥C` |
+| View Source | `⌘⌥U` |
+
+Typing `chrome://settings`, `chrome://history`, `chrome://bookmarks`, `chrome://downloads`, `chrome://extensions` or `chrome://passwords` in the address bar opens the matching Almac panel.
+
+--------|----------|
 | New Tab | `⌘T` |
 | Close Tab | `⌘W` |
 | Private Tab | `⌘⇧N` |

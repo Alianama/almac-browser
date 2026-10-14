@@ -4,8 +4,9 @@
 :root {
   --sidebar: 248px; /* lebar sidebar (diatur dari state, bisa diseret) */
   --side-space: var(--sidebar); /* ruang di kiri halaman: 0 saat sidebar disembunyikan */
-  --bar-h: 30px; /* tinggi bookmark bar (samakan dengan BAR_H di main.js) */
-  --bar-space: calc(var(--bar-h) + 6px); /* ruang di atas halaman: 0 saat bar disembunyikan */
+  --bar-h: 24px; /* tinggi bookmark bar (samakan dengan BAR_H di main.js) */
+  --bar-top: 5px; /* bar di tengah antara tepi atas jendela & halaman: 5px atas, 5px bawah */
+  --bar-space: var(--bar-h); /* ruang ekstra di atas halaman (selain --gap): 0 saat bar disembunyikan */
   --gap: 10px;      /* samakan dengan GAP di main.js */
   --ctl: 30px;      /* tinggi tombol & input */
   --radius: 12px;
@@ -458,27 +459,28 @@ body.resizing #sidebar, body.resizing #frame { transition: none; }
 /* ---------- bookmark bar ---------- */
 body.no-bar { --bar-space: 0px; }
 #bmbar {
-  position: fixed; z-index: 6; top: var(--gap); height: var(--bar-h);
-  left: calc(var(--side-space) + var(--gap)); right: var(--gap);
-  display: flex; align-items: center; gap: 2px; padding: 0 2px;
+  position: fixed; z-index: 6; top: var(--bar-top); height: var(--bar-h);
+  left: calc(var(--side-space) + var(--gap)); right: var(--gap); /* tepi kiri/kanan = tepi halaman */
+  display: flex; align-items: center; gap: 1px; padding: 0;
   -webkit-app-region: drag; /* area kosong bar bisa untuk menggeser jendela */
 }
 body.no-bar #bmbar { display: none; }
 #bmbar > *, #bmItems > * { -webkit-app-region: no-drag; }
 #bmItems { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; overflow: hidden; }
 button.bm-item {
-  flex: none; height: 26px; min-width: 0; max-width: 180px; padding: 0 8px; gap: 6px; font-size: 12.5px;
-  background: none; border-color: transparent; box-shadow: none; border-radius: 7px;
+  flex: none; height: 22px; min-width: 0; max-width: 160px; padding: 0 6px; gap: 5px; font-size: 12px; line-height: 1;
+  background: none; border-color: transparent; box-shadow: none; border-radius: 6px;
 }
-button.bm-item:hover, button.bm-item.open { background: var(--glass-strong); border-color: var(--border); box-shadow: 2px 2px 0 var(--shadow); transform: none; }
+button.bm-item:hover, button.bm-item.open { background: var(--glass-strong); border-color: var(--border); box-shadow: 1px 1px 0 var(--shadow); transform: none; }
 button.bm-item:active { transform: translate(1px, 1px); box-shadow: none; }
 button.bm-item > span:not(.wsi) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-button.bm-item img, .bm-menu img { width: 16px; height: 16px; flex: none; image-rendering: auto; border-radius: 3px; }
-button.bm-item > .wsi { font-size: 15px; }
-button.bm-item.bm-icon { width: 30px; padding: 0; }
+button.bm-item img, .bm-menu img { width: 14px; height: 14px; flex: none; image-rendering: auto; border-radius: 3px; }
+.bm-menu img { width: 16px; height: 16px; }
+button.bm-item > .wsi { font-size: 13px; }
+button.bm-item.bm-icon { width: 24px; padding: 0; }
 button.bm-item[hidden] { display: none; }
-.bm-sep { width: 2px; height: 16px; margin: 0 4px; border-radius: 1px; background: var(--muted); opacity: .35; flex: none; }
-.bm-hint { color: var(--muted); font-size: 12px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-sep { width: 2px; height: 12px; margin: 0 3px; border-radius: 1px; background: var(--muted); opacity: .35; flex: none; }
+.bm-hint { color: var(--muted); font-size: 11.5px; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bm-menu { z-index: 95; max-height: calc(100vh - 60px); overflow-y: auto; min-width: 220px; max-width: 320px; }
 .bm-menu .ctx-item > .wsi:last-child { margin-left: auto; opacity: .6; }
 #coverSnap { z-index: 5; }
@@ -535,10 +537,10 @@ select.field { appearance: none; cursor: pointer; padding-right: 28px;
 .modal:has(.sett-tabs) { width: min(520px, 100%); }
 
 /* ---------- cari di halaman ---------- */
-body.find-open { --bar-space: calc(var(--bar-h) + 6px); }
+body.find-open { --bar-space: var(--bar-h); }
 body.find-open #bmbar { display: none; }
 #findbar {
-  position: fixed; z-index: 7; top: var(--gap); height: var(--bar-h);
+  position: fixed; z-index: 7; top: var(--bar-top); height: var(--bar-h);
   left: calc(var(--side-space) + var(--gap)); right: var(--gap);
   display: flex; align-items: center; gap: 6px; padding: 0 4px 0 10px;
   background: var(--field); border: var(--bw) solid var(--border); border-radius: 9px; box-shadow: 2px 2px 0 var(--shadow);
@@ -548,7 +550,7 @@ body.find-open #bmbar { display: none; }
 #findbar.none-found { border-color: #ef4444; }
 #findInput { flex: 1; min-width: 0; height: 100%; font: inherit; color: var(--text); background: none; border: 0; outline: none; }
 #findCount { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
-#findbar button.mini { height: 22px; min-width: 22px; box-shadow: none; }
+#findbar button.mini { height: 18px; min-width: 18px; box-shadow: none; }
 
 /* ---------- zoom ---------- */
 button.zoom-chip { height: 22px; min-width: 0; padding: 0 6px; font-size: 11px; font-weight: 700; border-radius: 6px; box-shadow: none; background: var(--active); flex: none; }
@@ -708,3 +710,53 @@ button.engine-chip { height: 32px; padding: 0 12px; font-size: 12px; font-weight
 
 .dl-dir { align-items: center; }
 .dl-dir code { font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* grup tab */
+.tg-head { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px 0 10px; margin-top: 4px; flex: none; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--gc); }
+.tg-head:hover { background: var(--glass-strong); }
+.tg-head .tg-dot { width: 8px; height: 8px; flex: none; background: var(--gc); }
+.tg-head > span:not(.wsi) { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tg-head small { color: var(--muted); font-weight: 500; }
+.tg-head > .wsi { transform: rotate(90deg); transition: transform .15s var(--ease); }
+.tg-head.collapsed > .wsi { transform: none; }
+.tab.in-group { margin-left: 8px; box-shadow: inset 3px 0 0 var(--gc); }
+.tab.active.in-group { box-shadow: inset 3px 0 0 var(--gc), 3px 3px 0 var(--shadow); }
+/* speaker di tab yang bersuara: klik = mute */
+.tab .audio { height: 22px; min-width: 22px; padding: 0; flex: none; border-radius: 6px; box-shadow: none; background: none; border-color: transparent; }
+.tab .audio:hover { background: var(--glass-strong); transform: none; }
+.tab .audio.muted { color: var(--muted); }
+/* halaman awal mode privat (seperti incognito Chrome) */
+.priv-note { max-width: 520px; margin: 18px auto 0; padding: 12px 16px; border-radius: 12px; background: rgba(139, 92, 246, .14); border: 1px solid rgba(167, 139, 250, .35); font-size: 13px; line-height: 1.55; text-align: left; }
+/* counter notifikasi situs di tab (pengganti badge di ikon Dock) */
+.count { flex: none; min-width: 16px; height: 16px; padding: 0 4px; display: inline-grid; place-items: center; font-size: 9px; line-height: 1; color: #fff; background: #ef4444; border: var(--bw) solid var(--border); border-radius: 5px; box-shadow: 1px 1px 0 var(--shadow); }
+.count:empty { min-width: 10px; width: 10px; height: 10px; padding: 0; border-radius: 3px; }
+.pin-tile { position: relative; }
+.pin-tile .count { position: absolute; top: -5px; right: -5px; font-size: 9px; opacity: 1 !important; }
+
+/* Glance: latar snapshot buram, bingkai pixel di sekeliling halaman melayang, toolbar kaca di atasnya */
+#glance { position: fixed; inset: 0; z-index: 90; animation: fade .18s var(--ease); }
+#glance[hidden] { display: none; }
+#glanceSnap img { filter: blur(6px) brightness(.8) saturate(1.1); }
+#glance::after { content: ''; position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 25%, rgba(0, 0, 0, .25)); pointer-events: none; }
+#glanceFrame { position: fixed; z-index: 1; margin: calc(var(--bw) * -1); border: var(--bw) solid var(--border); border-radius: 12px; box-shadow: 6px 6px 0 var(--shadow), 0 24px 70px rgba(0, 0, 0, .35); background: var(--glass-strong); }
+#glanceBar { position: fixed; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 12px; border: var(--bw) solid var(--border); border-radius: 10px; box-shadow: 3px 3px 0 var(--shadow); animation: pop .2s var(--ease); }
+#glanceBar .g-meta { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; white-space: nowrap; }
+#glanceBar b { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; }
+#glanceBar small { color: var(--muted); font-size: 11px; }
+#glanceBar button.mini { height: 22px; min-width: 22px; box-shadow: none; }
+
+/* editor Boost */
+textarea.field.code { height: 120px; padding: 8px 10px; resize: vertical; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+
+/* lembar shortcut (⌘/): kotak disusun rapat per kolom (tanpa celah), tiap baris: nama kiri, tombol kanan */
+.modal:has(.keys-list) { width: min(680px, 100%); }
+.keys-list { max-height: 62vh; overflow-y: auto; padding: 2px 6px 4px 2px; }
+.keys-cols { columns: 2 280px; column-gap: 12px; }
+.keys-sec { break-inside: avoid; display: flex; flex-direction: column; margin-bottom: 12px; padding: 8px 10px 6px; background: var(--field); border: var(--bw) solid var(--border); border-radius: 10px; box-shadow: 2px 2px 0 var(--shadow); }
+.keys-sec h3 { font-size: 10px; font-weight: 400; color: var(--accent); letter-spacing: .5px; padding-bottom: 6px; margin-bottom: 2px; border-bottom: var(--bw) dashed color-mix(in srgb, var(--muted) 35%, transparent); }
+.keys-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; font-size: 12.5px; }
+.keys-row + .keys-row { border-top: 1px solid color-mix(in srgb, var(--muted) 15%, transparent); }
+.keys-row > span:first-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.keys { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; flex: none; max-width: 60%; }
+.keys kbd { min-width: 24px; text-align: center; font: 600 11px/1 var(--font-ui); padding: 4px 6px; border: var(--bw) solid var(--border); border-radius: 5px; background: var(--glass-strong); box-shadow: 1px 1px 0 var(--shadow); white-space: nowrap; }
+.keys-cols > .none { column-span: all; }
