@@ -765,3 +765,31 @@ textarea.field.code { height: 120px; padding: 8px 10px; resize: vertical; font: 
 body.win .top { padding-left: 0; } /* tidak ada tombol jendela macOS di header sidebar */
 body.win #bmbar, body.win #findbar { right: calc(var(--gap) + 140px); } /* tombol jendela Windows (overlay) di kanan atas */
 body.win.no-bar { --bar-space: var(--bar-h); } /* strip atas tetap ada (sama dengan barSpace() di main.js) */
+
+/* ---------- container, kode HTTP, Site info lanjutan, log request ---------- */
+.tab .cont-tag { flex: none; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; font: 9px/15px var(--font-pixel); font-style: normal; color: #111; background: var(--cc); border: var(--bw) solid var(--border); border-radius: 4px; }
+.tab.in-container .fav { border-color: var(--cc); box-shadow: 0 0 0 1px var(--cc); }
+.code { flex: none; padding: 0 4px; font: 9px/15px var(--font-pixel); color: #111; border: var(--bw) solid var(--border); border-radius: 4px; }
+.code.c2 { background: #a7f070; } .code.c3 { background: #41a6f6; } .code.c4 { background: #ffc93c; } .code.c5 { background: #ff6b7a; }
+.http-card { align-items: flex-start; }
+.http-card .meta b { display: flex; align-items: center; gap: 6px; }
+.http-card .chain { white-space: pre-wrap !important; word-break: break-all; font-size: 11px; }
+.hdr-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.hdr { padding: 1px 6px; font-size: 11px; border-radius: 5px; color: #ef4444; border: var(--bw) solid color-mix(in srgb, #ef4444 50%, transparent); }
+.hdr.on { color: #22c55e; border-color: color-mix(in srgb, #22c55e 50%, transparent); }
+.cert.headers { max-height: 240px; overflow-y: auto; }
+.device-form { display: flex; flex-direction: column; gap: 6px; }
+.device-form .inline .field { flex: 1; min-width: 120px; }
+.err-remember { justify-content: center; flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.cont-list { display: flex; flex-direction: column; gap: 6px; }
+.cont-list .field { flex: 1; min-width: 100px; }
+.modal:has(.req-list) { width: min(640px, 100%); }
+.req-list { max-height: 52vh; overflow-y: auto; font-size: 12px; border: var(--bw) solid var(--border); border-radius: 10px; background: var(--field); }
+.req { display: grid; grid-template-columns: 1fr 130px 44px 56px; gap: 8px; padding: 4px 10px; user-select: text; }
+.req > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.req > span:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }
+.req.head { position: sticky; top: 0; font: 10px var(--font-pixel); color: var(--muted); background: var(--field); border-bottom: var(--bw) solid var(--border); }
+.req.third > span:first-child { color: #b07cff; }
+.req.blocked > span:last-child { color: #ef4444; font-weight: 700; }
+.req:not(.head):hover { background: var(--active); }
+.modal:has(.http-card) { width: min(540px, 100%); }

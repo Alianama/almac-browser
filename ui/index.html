@@ -765,6 +765,16 @@ const PERM_ASK = { camera: 'use your camera', microphone: 'use your microphone',
 const fmtDate = sec => new Date(sec * 1000).toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' })
 const card = (icon, title, sub, ...extra) => el('div', { className: 'site-card' }, iconEl(icon), el('div', { className: 'meta' }, el('b', { textContent: title }), el('small', { textContent: sub })), ...extra)
 
+// header keamanan yang dicek (Site info): ada = hijau, tidak ada = merah
+const SEC_HEADERS = [['strict-transport-security', 'HSTS'], ['content-security-policy', 'CSP'], ['x-frame-options', 'X-Frame-Options'],
+  ['x-content-type-options', 'X-Content-Type-Options'], ['referrer-policy', 'Referrer-Policy'], ['permissions-policy', 'Permissions-Policy']]
+const codeClass = c => c >= 500 ? 'c5' : c >= 400 ? 'c4' : c >= 300 ? 'c3' : 'c2'
+const toggleLink = (icon, label, target) => {
+  const text = el('span', { textContent: (target.hidden ? 'Show ' : 'Hide ') + label })
+  return el('button', { type: 'button', className: 'link', onclick: () => { target.hidden = !target.hidden; text.textContent = (target.hidden ? 'Show ' : 'Hide ') + label } }, iconEl(icon), text)
+}
+const dl = rows => el('dl', { className: 'cert' }, ...rows.filter(r => r[1]).flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', {}, v)]))
+
 async function openSiteInfo() {
   const info = await almac.ask('siteInfo')
   if (!info) return
@@ -776,24 +786,46 @@ async function openSiteInfo() {
     secure ? 'Data you send (passwords, cards) is encrypted.' : web ? 'Do not enter passwords or personal data here.' : info.url)
   conn.classList.add(secure ? 'ok' : web ? 'bad' : 'neutral')
   body.push(conn)
-  if (info.cert) {
-    const c = info.cert
-    const details = el('dl', { className: 'cert', hidden: true }, ...[
+  if (info.container) body.push(card('layers', 'Container: ' + info.container, 'Cookies and logins in this tab are kept apart from the rest of the profile.'))
+  const c = info.cert
+  if (c && c.daysLeft <= 30) body.push(Object.assign(card('warn', c.daysLeft < 0 ? 'Certificate has expired' : `Certificate expires in ${c.daysLeft} ${c.daysLeft === 1 ? 'day' : 'days'}`, 'Valid until ' + fmtDate(c.validExpiry)), { className: 'site-card bad' }))
+  if (c) {
+    const t = info.tls
+    const details = dl([
       ['Issued to', c.subject + (c.subjectOrg ? ` (${c.subjectOrg})` : '')],
       ['Issued by', c.issuer + (c.issuerOrg ? ` (${c.issuerOrg})` : '')],
-      ['Valid', `${fmtDate(c.validStart)} – ${fmtDate(c.validExpiry)}`],
-      ['Verification', c.result + (c.knownRoot ? ' · trusted root CA' : '')],
+      ['Valid', `${fmtDate(c.validStart)} – ${fmtDate(c.validExpiry)} (${c.daysLeft < 0 ? 'expired' : c.daysLeft + ' days left'})`],
+      ['Names (SAN)', c.san?.length ? c.san.join(', ') : '—'],
+      ['Verification', c.result + (c.knownRoot ? ' · trusted root CA' : '') + (c.trusted ? ' · remembered by you' : '')],
+      ['TLS', t ? [t.protocol, t.alpn && 'ALPN ' + t.alpn].filter(Boolean).join(' · ') : info.proxy ? 'not measured (profile uses a proxy)' : 'could not measure'],
+      ['Cipher', t?.cipher],
+      ['Key exchange', t?.kx],
       ['Serial number', c.serial],
       ['SHA-256', c.fingerprint.replace(/^sha256\//, '')],
-    ].flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]))
-    const label = el('span', { textContent: 'View certificate' })
-    body.push(el('button', { type: 'button', className: 'link', onclick: () => { details.hidden = !details.hidden; label.textContent = details.hidden ? 'View certificate' : 'Hide certificate' } }, iconEl('cert'), label), details)
+    ])
+    details.hidden = true
+    body.push(el('div', { className: 'inline' }, toggleLink('cert', 'certificate & TLS', details),
+      ...(c.trusted ? [el('button', { type: 'button', className: 'link', onclick() { almac.cmd('certForget', info.host); this.remove() } }, iconEl('x'), 'Forget remembered certificate')] : [])), details)
   }
   if (web) {
+    // jaringan & HTTP: IP server, kode status (+ redirect), header keamanan
+    const r = info.resp
+    const last = r?.chain.at(-1)
+    const headers = el('dl', { className: 'cert headers', hidden: true }, ...(r?.headers || []).flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]))
+    const has = new Set((r?.headers || []).map(([k]) => k.toLowerCase()))
+    const val = name => r?.headers.find(([k]) => k.toLowerCase() === name)?.[1]
+    body.push(el('div', { className: 'site-card http-card' }, iconEl('globe'), el('div', { className: 'meta' },
+      el('b', {}, ...(last ? [el('span', { className: 'code ' + codeClass(last.code), textContent: last.code }), ' ' + (r.line.replace(/^HTTP\/[\d.]+ \d+ ?/, '') || '')] : ['No response recorded'])),
+      el('small', { textContent: [info.ips.length ? 'IP ' + info.ips.join(', ') : '', val('server') && 'Server: ' + val('server'), val('x-powered-by') && 'X-Powered-By: ' + val('x-powered-by')].filter(Boolean).join(' · ') || info.host }),
+      ...(r && r.chain.length > 1 ? [el('small', { className: 'chain', textContent: r.chain.map(h => `${h.code} ${h.url}`).join('\n') })] : []),
+      ...(r ? [el('div', { className: 'hdr-chips' }, ...SEC_HEADERS.map(([k, label]) => el('span', { className: 'hdr' + (has.has(k) ? ' on' : ''), title: val(k) || 'Missing', textContent: (has.has(k) ? '✓ ' : '✗ ') + label })))] : []))))
+    if (r) body.push(toggleLink('file', `all ${r.headers.length} response headers`, headers), headers)
     body.push(
       card('cookie', `${info.cookies} ${info.cookies === 1 ? 'cookie' : 'cookies'}`, 'stored for ' + info.domain,
         twoStep('Clear data', 'Sure?', () => almac.cmd('siteClearData', info.origin), false)),
-      card('shield', `${info.blocked} ads & trackers blocked`, 'on this page'),
+      card('shield', `${info.blocked} ads & trackers blocked`, `${info.requests} ${info.requests === 1 ? 'request' : 'requests'} to ${info.domains} ${info.domains === 1 ? 'domain' : 'domains'} on this page`,
+        el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(openRequestLog, 80) } }, 'Request log')),
+      deviceNotes(info),
       el('div', { className: 'row' }, el('span', { textContent: 'Site permissions' }), el('div', { className: 'perms' }, ...PERMS.map(([kind, label, icon]) => {
         const seg = el('div', { className: 'seg' }, ...[['ask', 'Ask'], ['allow', 'Allow'], ['block', 'Block']].map(([v, t]) => el('button', {
           type: 'button', className: v + ((info.perms[kind] || 'ask') === v ? ' on' : ''), textContent: t,
@@ -805,6 +837,56 @@ async function openSiteInfo() {
   }
   openModal(info.host || 'Site info', body, [{ label: 'Done', primary: true }])
 }
+almac.onOpenSiteInfo(() => openSiteInfo())
+
+// catatan perangkat (IP, VLAN, PIC) untuk host ini, terenkripsi di brankas Almac Passwords
+function deviceNotes(info) {
+  const box = el('div', { className: 'row device' }, el('span', { textContent: 'Device notes (encrypted with your passwords)' }))
+  if (info.device === undefined) {
+    box.append(el('button', { type: 'button', onclick: async () => { closeModal(); if (await pwReady('Unlock to see device notes.')) setTimeout(openSiteInfo, 80) } }, iconEl('lock'), 'Unlock to view'))
+    return box
+  }
+  const d = info.device || {}
+  const f = (k, ph) => el('input', { className: 'field', value: d[k] || '', placeholder: ph, spellcheck: false })
+  const ip = f('ip', 'IP / hostname, e.g. 10.20.1.5'), vlan = f('vlan', 'VLAN, e.g. 120 MGMT'), pic = f('pic', 'PIC / owner, e.g. Budi (NOC)')
+  const notes = el('textarea', { className: 'field focus-sites', value: d.notes || '', placeholder: 'Notes: rack, serial, firmware, escalation…', rows: 3 })
+  const form = el('div', { className: 'device-form', hidden: !info.device }, el('div', { className: 'inline' }, ip, vlan), pic, notes,
+    el('button', { type: 'button', onclick: async () => {
+      const r = await askErr('deviceSave', { host: info.host, ip: ip.value, vlan: vlan.value, pic: pic.value, notes: notes.value })
+      toast(r?.error ? 'Not saved: ' + r.error : 'Device notes saved', r?.error ? 'warn' : 'check')
+    } }, iconEl('check'), 'Save notes'))
+  box.append(...(info.device ? [] : [toggleLink('edit', 'device notes', form)]), form)
+  return box
+}
+
+// log request: domain yang dihubungi halaman ini (pihak pertama dulu), bisa disalin sebagai CSV untuk investigasi
+async function openRequestLog() {
+  const log = await almac.ask('requestLog')
+  if (!log.rows.length) return toast('No requests recorded for this tab yet. Reload the page to record them.', 'info')
+  const search = el('input', { className: 'field', placeholder: 'Filter domains', autocomplete: 'off', spellcheck: false })
+  const onlyThird = el('input', { type: 'checkbox' })
+  const table = el('div', { className: 'req-list' })
+  const draw = () => {
+    const q = search.value.trim().toLowerCase()
+    const rows = log.rows.filter(r => (!q || (r.host + ' ' + r.ip).includes(q)) && (!onlyThird.checked || r.third))
+    table.replaceChildren(el('div', { className: 'req head' }, ...['Domain', 'IP', 'Req', 'Blocked'].map(t => el('span', { textContent: t }))),
+      ...rows.map(r => el('div', { className: 'req' + (r.third ? ' third' : '') + (r.blocked ? ' blocked' : ''), title: r.types },
+        el('span', { textContent: r.host }), el('span', { textContent: r.ip || '—' }), el('span', { textContent: r.n }), el('span', { textContent: r.blocked || '' }))))
+  }
+  search.oninput = draw; onlyThird.onchange = draw
+  draw()
+  const third = log.rows.filter(r => r.third)
+  const csv = () => ['domain,ip,requests,blocked,third_party,types', ...log.rows.map(r => [r.host, r.ip, r.n, r.blocked, r.third, `"${r.types}"`].join(','))].join('\n')
+  openModal('Request log · ' + log.host, [
+    el('p', { className: 'modal-text', textContent: `${log.rows.length} ${log.rows.length === 1 ? 'domain' : 'domains'} (${third.length} third-party), ${log.rows.reduce((a, r) => a + r.blocked, 0)} blocked or replaced by the ad blocker. Recorded since this page started loading.` }),
+    el('div', { className: 'inline' }, search, el('label', { className: 'check' }, onlyThird, el('span', { textContent: 'Third-party only' }))),
+    table,
+  ], [
+    { label: 'Copy CSV', onClick: () => { navigator.clipboard.writeText(csv()); toast('Request log copied as CSV', 'copy'); return false } },
+    { label: 'Done', primary: true },
+  ])
+}
+almac.onOpenRequestLog(() => openRequestLog())
 
 // situs meminta izin -> modal pixel (pengganti prompt bawaan)
 almac.onPermRequest(({ id, host, kinds }) => {
@@ -818,6 +900,20 @@ almac.onPermRequest(({ id, host, kinds }) => {
     { label: 'Block', onClick: () => answer(false) },
     { label: 'Allow', primary: true, onClick: () => answer(true) },
   ], () => { if (!answered) almac.cmd('permAnswer', { id, allow: false, remember: false }) })
+})
+
+// login HTTP Basic/Digest (router, iLO, ...) atau proxy yang minta password
+almac.onAuthRequest(({ id, host, realm, proxy }) => {
+  let answered = false
+  const user = el('input', { className: 'field', placeholder: 'Username', autocomplete: 'off', spellcheck: false })
+  const pass = pwField('Password')
+  openModal(proxy ? 'Proxy sign-in' : 'Sign in', [
+    el('p', { className: 'modal-text' }, el('b', { textContent: host }), proxy ? ' (proxy) requires a username and password.' : ' requires a username and password.', ...(realm ? [el('br'), 'Realm: ' + realm] : [])),
+    user, pass,
+  ], [
+    { label: 'Cancel' },
+    { label: 'Sign in', primary: true, onClick: () => { answered = true; almac.cmd('authAnswer', { id, username: user.value, password: pass.value }) } },
+  ], () => { if (!answered) almac.cmd('authAnswer', { id }) })
 })
 
 // ---- share screen: pilih layar / jendela (picker sistem macOS dipakai kalau tersedia) ----
@@ -1370,14 +1466,15 @@ function renderTabs(tabs, groups = {}) {
     const x = el('button', { className: 'x', title: 'Close (⌘W)', onclick: e => { e.stopPropagation(); almac.cmd('close', t.id) } }, iconEl('x'))
     const audio = t.audible || t.muted ? [el('button', { className: 'audio' + (t.muted ? ' muted' : ''), title: t.muted ? 'Unmute tab' : 'Mute tab', onclick: e => { e.stopPropagation(); almac.cmd('muteTab', t.id) } }, iconEl(t.muted ? 'volume-x' : 'volume-2'))] : []
     const otherGroups = Object.entries(groups).filter(([gid]) => gid !== t.tg && tabs.some(x => x.tg === gid))
+    const cont = t.container
     return el('div', {
-      ...(g && { style: '--gc:' + g.color }),
+      style: [g && '--gc:' + g.color, cont && '--cc:' + cont.color].filter(Boolean).join(';'),
       draggable: true,
       // seret tab ke Almi untuk menutupnya (dia memakannya)
       ondragstart: e => { e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; almac.cmd('petFeed', t.id) },
       ondragend: () => almac.cmd('petFeedEnd'),
-      className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (g ? ' in-group' : '') + (seen.has(t.id) ? '' : ' new'),
-      title: t.sleeping ? t.url + '\n(sleeping, saving RAM)' : t.url,
+      className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (g ? ' in-group' : '') + (cont ? ' in-container' : '') + (seen.has(t.id) ? '' : ' new'),
+      title: (cont ? `[${cont.name}] ` : '') + (t.sleeping ? t.url + '\n(sleeping, saving RAM)' : t.url),
       onclick: () => almac.cmd('select', t.id),
       oncontextmenu: e => {
         e.preventDefault()
@@ -1388,6 +1485,7 @@ function renderTabs(tabs, groups = {}) {
           { icon: 'pin', label: 'Pin tab (⌘⇧D)', disabled: !t.url, onClick: () => almac.cmd('pinTab', t.id) },
           { icon: 'copy', label: 'Copy URL', onClick: () => almac.cmd('copyUrl', t.id) },
           { icon: t.muted ? 'volume-2' : 'volume-x', label: t.muted ? 'Unmute tab' : 'Mute tab', disabled: t.sleeping, onClick: () => almac.cmd('muteTab', t.id) },
+          ...containerMenu(t),
           '-',
           t.tg ? { icon: 'layers', label: 'Remove from group', onClick: () => almac.cmd('tgRemove', t.id) } : { icon: 'layers', label: 'Add tab to new group', onClick: () => almac.cmd('tgNew', t.id) },
           ...otherGroups.map(([gid, og]) => ({ icon: 'layers', label: 'Add to group: ' + groupName(og, tabs.filter(x => x.tg === gid).length), onClick: () => almac.cmd('tgAdd', { id: t.id, gid }) })),
@@ -1403,9 +1501,33 @@ function renderTabs(tabs, groups = {}) {
           { icon: 'x', label: 'Close tab', danger: true, onClick: () => almac.cmd('close', t.id) },
         ])
       },
-    }, fav, el('span', { textContent: t.title }), ...countBadge(t), ...audio, ...(t.split ? [el('span', { className: 'split-mark', title: 'Split view' }, iconEl('split'))] : []), ...(t.sleeping ? [el('em', { className: 'zz', textContent: 'zz' })] : []), x)
+    }, fav, el('span', { textContent: t.title }), ...(cont ? [el('em', { className: 'cont-tag', textContent: cont.name })] : []),
+      ...(t.code ? [el('b', { className: 'code ' + codeClass(+t.code.split('›').at(-1)), textContent: t.code, title: t.codeTitle })] : []), ...countBadge(t), ...audio, ...(t.split ? [el('span', { className: 'split-mark', title: 'Split view' }, iconEl('split'))] : []), ...(t.sleeping ? [el('em', { className: 'zz', textContent: 'zz' })] : []), x)
   }
 }
+
+// container (seperti Firefox): buka ulang tab di container lain / tab sekali pakai
+function containerMenu(t) {
+  const prof = lastState.profiles.find(p => p.id === lastState.activeProfile)
+  if (prof.ephemeral || !t.url) return []
+  const cur = t.container?.id
+  return ['-',
+    ...(cur ? [{ icon: 'layers', label: 'Reopen without container', onClick: () => almac.cmd('reopenIn', { id: t.id, container: null }) }] : []),
+    ...(prof.containers || []).filter(c => c.id !== cur).map(c => ({ icon: 'layers', label: 'Reopen in ' + c.name, onClick: () => almac.cmd('reopenIn', { id: t.id, container: c.id }) })),
+    { icon: 'private', label: 'Reopen in disposable tab', disabled: !!t.container?.temp, onClick: () => almac.cmd('reopenIn', { id: t.id, container: 'tmp' }) },
+  ]
+}
+// klik kanan tombol + : tab baru di container / sekali pakai
+document.querySelector('.nav [data-cmd=newTab]').addEventListener('contextmenu', e => {
+  e.preventDefault()
+  const prof = lastState.profiles.find(p => p.id === lastState.activeProfile)
+  ctxMenu(e.clientX, e.clientY, [
+    { icon: 'plus', label: 'New tab (⌘T)', onClick: () => almac.cmd('newTab') },
+    { icon: 'private', label: 'New disposable tab (⌘⌥N)', onClick: () => almac.cmd('openDisposable') },
+    ...(prof.ephemeral ? [] : [...(prof.containers?.length ? ['-'] : []), ...(prof.containers || []).map(c => ({ icon: 'layers', label: 'New tab in ' + c.name, onClick: () => almac.cmd('newTabIn', c.id) })),
+      '-', { icon: 'gear', label: 'Manage containers…', onClick: () => openSettings('profile') }]),
+  ])
+})
 
 function editProfile(p) {
   const draft = { name: p.name, color: p.color, icon: p.icon || '' }
@@ -1441,7 +1563,7 @@ function editProfile(p) {
 
 // ---- pengaturan ----
 function openSettings(initialTab = 'general') {
-  const s = lastState
+  let s = lastState
   let activeTab = initialTab
 
   // ---- Tab: Umum ----
@@ -1499,6 +1621,11 @@ function openSettings(initialTab = 'general') {
     )
     const jsCheck = el('input', { type: 'checkbox', checked: !!s.blockJavaScript, onchange: () => almac.cmd('setting', { key: 'blockJavaScript', value: jsCheck.checked }) })
     const toggle = (key, label) => { const c = el('input', { type: 'checkbox', checked: !!s[key], onchange: () => almac.cmd('setting', { key, value: c.checked }) }); return el('label', { className: 'check sett-row' }, c, el('span', { textContent: label })) }
+    // sertifikat tidak valid yang diingat (router, NAS, iLO): bisa dicabut
+    const trusted = el('div', { className: 'row' }, el('span', { textContent: 'Remembered certificates (self-signed devices)' }))
+    almac.ask('certTrust').then(hosts => trusted.append(hosts.length ? el('div', { className: 'pw-list' }, ...hosts.map(h => el('div', { className: 'hrow' }, el('div', { className: 'meta' }, el('b', { textContent: h })),
+      el('button', { type: 'button', className: 'mini hx', title: 'Forget: ask again next time', onclick() { almac.cmd('certForget', h); this.parentNode.remove() } }, iconEl('x')))))
+      : el('p', { className: 'modal-text', style: 'font-size:11px', textContent: 'None yet. On a certificate warning, tick "Remember this certificate" before proceeding.' })))
     const wipeSeg = el('div', { className: 'seg' }, ...[[0, 'Never'], [15, '15 min'], [30, '30 min'], [60, '1 hour']].map(([v, t]) => el('button', {
       type: 'button', className: v === s.privateWipeAfter ? 'on ask' : '', textContent: t,
       onclick() { almac.cmd('setting', { key: 'privateWipeAfter', value: v }); wipeSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
@@ -1511,6 +1638,7 @@ function openSettings(initialTab = 'general') {
         toggle('httpsOnly', 'HTTPS-Only mode: upgrade http:// links, warn before opening insecure sites'),
         toggle('stripTracking', 'Remove tracking parameters from links (utm_*, fbclid, gclid…)'),
         el('div', { className: 'row' }, el('span', { textContent: 'Auto-delete the private session after it is unused for' }), wipeSeg),
+        trusted,
       ),
       el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('trash'), el('span', { textContent: 'Clear Data' })),
         el('div', { className: 'row' },
@@ -1570,7 +1698,32 @@ function openSettings(initialTab = 'general') {
         }, p.name))
       )
     )
+    // proxy per profil (container & tab sekali pakai di profil ini ikut)
+    const profile = s.profiles.find(p => p.id === s.activeProfile)
+    const px = { mode: 'system', rules: '', bypass: '', pac: '', ...profile.proxy }
+    const rules = el('input', { className: 'field', value: px.rules, placeholder: 'socks5://127.0.0.1:1080  or  http://proxy.kantor:8080', spellcheck: false })
+    const bypass = el('input', { className: 'field', value: px.bypass, placeholder: '<local>;*.kantor.local;10.0.0.0/8', spellcheck: false })
+    const pac = el('input', { className: 'field', value: px.pac, placeholder: 'http://wpad.kantor.local/proxy.pac', spellcheck: false })
+    const fixedBox = el('div', { className: 'row' }, el('span', { textContent: 'Proxy server (SSH tunnel: ssh -D 1080 host → socks5://127.0.0.1:1080)' }), rules,
+      el('span', { textContent: 'Bypass (no proxy for)' }), bypass)
+    const pacBox = el('div', { className: 'row' }, el('span', { textContent: 'PAC script URL' }), pac)
+    let pxMode = px.mode
+    const showPx = () => { fixedBox.hidden = pxMode !== 'fixed'; pacBox.hidden = pxMode !== 'pac' }
+    const pxSeg = el('div', { className: 'seg' }, ...[['system', 'System'], ['direct', 'No proxy'], ['fixed', 'Manual'], ['pac', 'PAC']].map(([v, t]) => el('button', {
+      type: 'button', className: v === pxMode ? 'on ask' : '', textContent: t,
+      onclick() { pxMode = v; pxSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : ''); showPx() },
+    })))
+    showPx()
+    const proxySection = el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('shield'), el('span', { textContent: 'Proxy · profile ' + profile.name })),
+      el('div', { className: 'row' }, el('span', { textContent: 'Proxy for this profile' }), pxSeg), fixedBox, pacBox,
+      el('div', { className: 'inline' }, el('button', { type: 'button', onclick: () => {
+        if (pxMode === 'fixed' && !rules.value.trim()) return toast('Enter a proxy server first', 'warn')
+        if (pxMode === 'pac' && !/^(https?|file|data):/.test(pac.value.trim())) return toast('Enter a PAC URL (http://…)', 'warn')
+        almac.cmd('proxySet', { mode: pxMode, rules: rules.value, bypass: bypass.value, pac: pac.value })
+      } }, iconEl('check'), 'Apply proxy')),
+      el('p', { className: 'modal-text', style: 'font-size:11px;line-height:1.6', textContent: 'Each profile can use its own proxy, e.g. "Work" through the company proxy or an SSH tunnel, "Personal" direct. Proxies that ask for a password show a sign-in box.' }))
     return [
+      proxySection,
       el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('globe'), el('span', { textContent: 'DNS Settings' })),
         el('div', { className: 'row' }, el('span', { textContent: 'Mode DNS' }), modeSeg),
         ...(s.dnsPausedForVpn ? [el('div', { className: 'site-card' }, iconEl('info'), el('div', { className: 'meta' },
@@ -1640,6 +1793,7 @@ function openSettings(initialTab = 'general') {
           ),
         ] : []),
       ),
+      ...(profile.ephemeral ? [] : [containerSection(profile)]),
       el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('shield'), el('span', { textContent: 'Session & Profile Data' })),
         el('div', { className: 'row' },
           el('span', { textContent: 'Session data' }),
@@ -1655,6 +1809,22 @@ function openSettings(initialTab = 'general') {
     ]
   }
 
+  // ---- container: daftar, ganti nama/warna, hapus ----
+  function containerSection(profile) {
+    const list = el('div', { className: 'cont-list' }, ...(profile.containers || []).map(c => {
+      const name = el('input', { className: 'field', value: c.name, maxLength: 24, onchange: () => almac.cmd('containerUpdate', { id: c.id, name: name.value }) })
+      const color = el('input', { type: 'color', className: 'pick-color', value: c.color, onchange: () => almac.cmd('containerUpdate', { id: c.id, color: color.value }) })
+      return el('div', { className: 'inline' }, color, name,
+        el('button', { type: 'button', onclick: () => { closeModal(); almac.cmd('newTabIn', c.id) } }, iconEl('plus'), 'New tab'),
+        twoStep('Delete', 'Delete tabs & data?', () => almac.cmd('containerRemove', c.id)))
+    }))
+    const newName = el('input', { className: 'field', placeholder: 'e.g. AWS Prod, Azure Client A', maxLength: 24 })
+    return el('div', { className: 'sett-section' }, el('div', { className: 'sett-head' }, iconEl('layers'), el('span', { textContent: 'Containers' })),
+      el('p', { className: 'modal-text', textContent: 'Like Firefox containers: each container keeps its own cookies and logins inside this profile, so you can be signed in to several AWS, Azure or Google Cloud accounts in one workspace. Right-click a tab or the + button to use them.' }),
+      list,
+      el('div', { className: 'inline' }, newName, el('button', { type: 'button', onclick: () => { almac.cmd('containerAdd', { name: newName.value }); setTimeout(() => switchTab('profile'), 120) } }, iconEl('plus'), 'Add container')))
+  }
+
   // ---- Bangun modal dengan tab ----
   const TABS = [
     { id: 'general', label: 'General', icon: 'gear' },
@@ -1666,6 +1836,7 @@ function openSettings(initialTab = 'general') {
   const content = el('div', { className: 'sett-content' })
   const tabBtns = el('div', { className: 'sett-tabs' })
   function switchTab(id) {
+    s = lastState // terbaru (mis. container baru ditambahkan)
     activeTab = id
     tabBtns.querySelectorAll('.sett-tab-btn').forEach(b => b.classList.toggle('on', b.dataset.tab === id))
     const fns = { general: tabGeneral, privacy: tabPrivacy, dns: tabDns, focus: tabFocus, profile: tabProfile }
@@ -1732,6 +1903,12 @@ const PALETTE_CMDS = [
   ['Reopen closed tab', 'retry', () => almac.cmd('reopenTab'), '⌘⇧T'],
   ['Pin / unpin tab', 'pin', () => almac.cmd('pinTab'), '⌘⇧D'],
   ['New private (incognito) tab', 'private', () => almac.cmd('openPrivate'), '⌘⇧N'],
+  ['New disposable tab', 'private', () => almac.cmd('openDisposable'), '⌘⌥N'],
+  ['Site info & certificate', 'lock', () => setTimeout(openSiteInfo, 80)],
+  ['Request log', 'list', () => setTimeout(openRequestLog, 80), '⌘⌥L'],
+  ['Device notes', 'cpu', () => setTimeout(openDevices, 80)],
+  ['Containers', 'layers', () => setTimeout(() => openSettings('profile'), 80)],
+  ['Proxy settings', 'shield', () => setTimeout(() => openSettings('dns'), 80)],
   ['Picture in picture', 'tv', () => almac.cmd('pip'), '⌘⌥P'],
   ['Start focus (25 min)', 'target', () => almac.cmd('focusStart', 25)],
   ['Stop focus', 'cancel', () => almac.cmd('focusStop')],
@@ -1894,6 +2071,7 @@ async function openPasswords(q = '') {
       if (r) { toast(`Imported ${r.added} new, ${r.updated} updated`, 'download'); draw() }
     } }, iconEl('download'), 'Import CSV'),
     el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(exportPasswords, 80) } }, iconEl('file'), 'Export CSV'),
+    el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(openDevices, 80) } }, iconEl('cpu'), 'Device notes'),
     el('button', { type: 'button', onclick: () => { closeModal(); setTimeout(passwordSettings, 80) } }, iconEl('gear'), 'Settings'),
     el('button', { type: 'button', onclick: () => { almac.cmd('pwLock'); closeModal() } }, iconEl('lock'), 'Lock'))
   // login untuk situs yang sedang dibuka: isi langsung ke halaman (seperti Bitwarden)
@@ -1933,6 +2111,26 @@ async function editPassword(e) {
     })
     return false
   } }])
+}
+
+// semua catatan perangkat (IP, VLAN, PIC): dicari, klik = buka perangkatnya
+async function openDevices() {
+  if (!await pwReady('Unlock to see device notes.')) return
+  const list = el('div', { className: 'pw-list' })
+  const search = el('input', { className: 'field', placeholder: 'Search host, IP, VLAN, PIC, notes', autocomplete: 'off', spellcheck: false })
+  const draw = async () => {
+    const items = await askErr('deviceList', search.value)
+    if (items.error) return closeModal()
+    list.replaceChildren(...(items.length ? items.map(d => el('div', { className: 'hrow pw-row', title: d.notes || '', onclick: () => { closeModal(); almac.cmd('open', 'https://' + d.host) } },
+      iconEl('cpu'), el('div', { className: 'meta' }, el('b', { textContent: d.host }), el('small', { textContent: [d.ip, d.vlan && 'VLAN ' + d.vlan, d.pic && 'PIC ' + d.pic].filter(Boolean).join(' · ') || d.notes })),
+      el('button', { type: 'button', className: 'mini', title: 'Copy details', onclick: ev => { ev.stopPropagation(); navigator.clipboard.writeText([`Host: ${d.host}`, d.ip && `IP: ${d.ip}`, d.vlan && `VLAN: ${d.vlan}`, d.pic && `PIC: ${d.pic}`, d.notes && `Notes: ${d.notes}`].filter(Boolean).join('\n')); toast('Device details copied', 'copy') } }, iconEl('copy'))))
+      : [el('p', { className: 'none', textContent: search.value ? 'No matches.' : 'No device notes yet. Open a device (router, NAS, iLO…) and add notes from Site info (lock icon).' })]))
+  }
+  let timer
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 100) }
+  await openModal('Device notes', [search, list], [{ label: 'Back', onClick: () => { setTimeout(openPasswords, 80) } }, { label: 'Done', primary: true }])
+  search.focus()
+  draw()
 }
 
 function exportPasswords() {
@@ -2001,17 +2199,28 @@ function renderLoadError(e) {
     b.onclick = () => { if (b.dataset.armed) almac.cmd(cmd); else { b.dataset.armed = '1'; b.textContent = 'Click again to continue' } }
     return b
   }
+  // sertifikat: bisa diingat permanen (terikat fingerprint); default dicentang untuk perangkat internal (IP, nas, *.lan)
+  const remember = el('input', { type: 'checkbox', checked: !!e.internal && !e.changed })
+  const certGo = unsafe(`Proceed to ${e.host} (unsafe)`, 'certProceed')
+  certGo.onclick = () => { if (certGo.dataset.armed) almac.cmd('certProceed', remember.checked); else { certGo.dataset.armed = '1'; certGo.textContent = 'Click again to continue' } }
   const T = {
-    cert: ['Your connection is not private', `${e.host}: ${e.text || ''}${e.issuer ? ' Issued by ' + e.issuer + '.' : ''} Someone could be trying to steal your passwords or data.`,
-      [btn('Back to safety', 'errBack', 'primary'), unsafe(`Proceed to ${e.host} (unsafe)`, 'certProceed')]],
+    cert: [e.changed ? 'This certificate has changed' : 'Your connection is not private',
+      e.changed ? `${e.host} now shows a different certificate from the one you trusted. If you did not replace it yourself, someone may be intercepting the connection.`
+        : `${e.host}: ${e.text || ''}${e.issuer ? ' Issued by ' + e.issuer + '.' : ''} Someone could be trying to steal your passwords or data.`,
+      [btn('Back to safety', 'errBack', 'primary'), certGo, el('label', { className: 'check err-remember' }, remember, el('span', { textContent: 'Remember this certificate for ' + e.host }))]],
+    lookalike: ['Is this the site you want?', e.target ? `${e.shown} looks like ${e.target}. Fake sites copy well-known names to steal passwords and money.`
+        : `${e.shown} uses letters from another alphabet that look like normal letters. Fake sites use this to imitate real ones.`,
+      [...(e.target ? [btn('Go to ' + e.target, 'lookalikeGo', 'primary')] : [btn('Go back', 'errBack', 'primary')]), unsafe(`Continue to ${e.shown}`, 'lookalikeProceed')]],
     https: ['This site has no secure connection', `${e.host} does not support HTTPS. Anything you send there (passwords, messages) can be read by others on the network.`,
       [btn('Go back', 'errBack', 'primary'), unsafe('Open insecure version (http)', 'httpProceed')]],
+    http: ["This page isn't working", `${e.host || 'This site'} returned an error and sent no content. Try again later.`,
+      [btn('Try again', 'errRetry', 'primary'), btn('Go back', 'errBack')]],
     net: ["Can't reach this page", e.dns ? `${e.host} could not be found using DNS-over-HTTPS. Company networks and VPNs often need the system DNS.` : `${e.host || 'This page'} did not load. Check your connection or try again.`,
       [btn('Try again', 'errRetry', 'primary'), ...(e.dns ? [btn('Use system DNS', 'useSystemDns')] : []), btn('Go back', 'errBack')]],
   }[e.kind]
   $('#errTitle').textContent = T[0]
   $('#errText').textContent = T[1]
-  $('#errCode').textContent = e.code || ''
+  $('#errCode').textContent = e.kind === 'lookalike' ? e.host : e.code || ''
   $('#errActions').replaceChildren(...T[2])
   const ctx = $('#errCat').getContext('2d')
   const draw = () => { ctx.clearRect(0, 0, 192, 192); almiDraw(ctx, ALMI.anims[e.kind === 'net' ? 'look' : 'alert'][0], 0, 0, 192) }

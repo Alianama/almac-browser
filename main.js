@@ -8,6 +8,7 @@ const { installChromeWebStore, uninstallExtension } = require('electron-chrome-w
 const { ElectronBlocker } = require('@ghostery/adblocker-electron')
 const { getDomain } = require('tldts-experimental')
 const passwords = require('./passwords')
+const { lookalike } = require('./lookalike')
 const { createUpdater } = require('./updater')
 
 app.setName('Almac Browser')
@@ -77,7 +78,7 @@ process.on('uncaughtException', e => {
 })
 
 let win, blocker, updater
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -99,6 +100,11 @@ const closedTabs = [] // tab yang baru ditutup (⌘⇧T), maks 20, hanya selama 
 const httpAllowed = new Set() // host yang boleh http setelah user setuju (HTTPS-Only), hanya selama sesi
 const upgraded = new Set() // url https hasil upgrade otomatis -> kalau gagal dimuat, tawarkan versi http
 const certAllowed = new Map() // host -> fingerprint sertifikat tidak valid yang user izinkan ("Proceed anyway"), hanya selama sesi
+// state.certTrust: sama, tapi diingat permanen (router, firewall, iLO/iDRAC, Proxmox, NAS pakai self-signed). Terikat fingerprint:
+// sertifikat berganti -> ditanya lagi (seperti known_hosts SSH)
+const lookalikeOk = new Set() // host mirip situs lain yang tetap dibuka user, hanya selama sesi
+const expiryWarned = new Set() // host yang sudah diberi tahu sertifikatnya hampir kedaluwarsa (sekali per sesi)
+const tabByWc = new WeakMap() // webContents -> tab (webRequest dipanggil untuk tiap request, jangan cari di state.tabs)
 // Electron tidak punya halaman error: halaman gagal = layar putih. Almac menampilkan halaman error sendiri (UI) & menyembunyikan view-nya.
 const CERT_TEXT = {
   'net::ERR_CERT_AUTHORITY_INVALID': 'The certificate is not issued by a trusted authority (self-signed or company certificate).',
@@ -116,6 +122,8 @@ let privSeen = 0 // terakhir kali profil privat aktif (hapus otomatis)
 const focusOn = () => state.focus.until > Date.now()
 const dayKey = (d = new Date()) => d.toISOString().slice(0, 10)
 const isLocalHost = h => h === 'localhost' || h.endsWith('.local') || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[)/.test(h) || /^\d+\.\d+\.\d+\.\d+$/.test(h)
+// perangkat jaringan internal: IP, nama tanpa titik (pve, nas), domain lokal -> sertifikat yang diizinkan diingat secara default
+const isInternalHost = h => isLocalHost(h) || !h.includes('.') || /\.(lan|home|internal|intranet|corp|localdomain|home\.arpa)$/.test(h)
 // parameter pelacak di URL (utm_*, fbclid, ...) dibuang sebelum halaman dimuat
 const TRACK_PARAM = /^(utm_\w+|fbclid|gclid|dclid|gbraid|wbraid|msclkid|yclid|mc_eid|mc_cid|igshid|_hsenc|_hsmi|mkt_tok|twclid|ttclid|si)$/i
 function cleanUrl(url) {
@@ -299,6 +307,7 @@ function load() {
   state.profiles.forEach(workspaces)
   state.tabs = state.tabs.map(t => ({
     ...t, id: nextTabId++, view: null, blocked: 0, // dipulihkan dalam kondisi tidur
+    container: profileOf(t.profileId)?.containers?.some(c => c.id === t.container) ? t.container : undefined,
     wsId: profileOf(t.profileId)?.workspaces.some(w => w.id === t.wsId) ? t.wsId : profileOf(t.profileId)?.workspaces[0].id,
   }))
   history = readJson(HISTORY_FILE) || []
@@ -483,6 +492,8 @@ function flush() {
       id: t.id, title: t.title || t.url || 'New tab', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
       pinned: !!t.pinned, atPin: !t.pinned || t.url === t.pinUrl,
       count: tabCount(t), audible: !!t.view?.webContents.isCurrentlyAudible(), muted: !!t.view?.webContents.isAudioMuted(), tg: t.tg || null,
+      code: t.resp?.badge || '', codeTitle: t.resp ? t.resp.chain.map(h => `${h.code} ${h.url}`).join('\n') : '',
+      container: isTemp(t.container) ? { id: t.container, name: 'Disposable', color: '#ff6b7a', temp: true } : containerOf(t) || null,
     })),
     tabGroups: state.tabGroups,
     url: active?.url || active?.loadError?.url || '',
@@ -517,13 +528,29 @@ function flush() {
   if (petWin && petState !== petSent) { petSent = petState; petWin.webContents.send('pet-state', JSON.parse(petState)) }
   // profil privat tidak pernah ditulis ke disk
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
-  const tabs = state.tabs.filter(t => !priv.has(t.profileId)).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg }))
+  const tabs = state.tabs.filter(t => !priv.has(t.profileId) && !isTemp(t.container)).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container }))
   for (const gid in state.tabGroups) if (!state.tabs.some(t => t.tg === gid)) delete state.tabGroups[gid] // grup tanpa tab dibuang
   const profiles = state.profiles.filter(p => !p.ephemeral)
   const sitePerms = Object.fromEntries(Object.entries(state.sitePerms).filter(([id]) => !priv.has(id)))
   const activeProfile = priv.has(state.activeProfile) ? profiles[0]?.id : state.activeProfile
   stateToSave = JSON.stringify({ ...state, tabs, profiles, sitePerms, activeProfile })
   stateTimer ||= setTimeout(() => { stateTimer = null; writeAtomic(STATE_FILE, stateToSave) }, 1000) // dikumpulkan, bukan tiap render
+}
+
+// nama di sertifikat (Subject Alternative Name) dari PEM yang diberikan Chromium
+const sanOf = pem => { try { return (new crypto.X509Certificate(pem).subjectAltName || '').split(', ').filter(Boolean).map(x => x.replace(/^(DNS|IP Address):/, '')).slice(0, 100) } catch { return [] } }
+// versi TLS & cipher: Electron tidak memberikannya -> jabat tangan TLS sendiri ke server (tanpa request HTTP), saat Site info dibuka.
+// ponytail: koneksi langsung dari Node, bukan lewat Chromium -> dilewati kalau profil memakai proxy; cipher bisa beda dari Chromium
+function tlsProbe(host, port) {
+  return new Promise(resolve => {
+    const done = v => { resolve(v); sock.destroy() }
+    const sock = require('tls').connect({ host: host.replace(/^\[|\]$/g, ''), port: +port || 443, servername: require('net').isIP(host.replace(/^\[|\]$/g, '')) ? undefined : host, rejectUnauthorized: false, ALPNProtocols: ['h2', 'http/1.1'] }, () => {
+      const c = sock.getCipher(), k = sock.getEphemeralKeyInfo()
+      done({ protocol: sock.getProtocol(), cipher: c?.standardName || c?.name || '', kx: k?.name || k?.type || '', alpn: sock.alpnProtocol || '' })
+    })
+    sock.setTimeout(4000, () => done(null))
+    sock.on('error', () => done(null))
+  })
 }
 
 // ikon di kolom alamat: secure (https), insecure (http), neutral (internal/kosong)
@@ -536,14 +563,50 @@ function security(t) {
   return !cert || cert.result === 'net::OK' ? 'secure' : 'insecure'
 }
 
-function profileCtx(profileId) {
-  if (ctx[profileId]) return ctx[profileId]
-  // profil privat: partisi tanpa "persist:" = hanya di memori, hilang saat ditutup / app keluar
-  const ses = session.fromPartition(profileOf(profileId)?.ephemeral ? 'private-' + profileId : 'persist:' + profileId)
+// container (seperti Firefox): cookie & login terpisah di dalam satu profil (mis. 3 akun AWS di satu workspace).
+// 'tmp…' = tab sekali pakai: sesi hanya di memori, dibuang saat tab terakhirnya ditutup (buka link mencurigakan).
+const isTemp = c => !!c && c.startsWith('tmp')
+const ctxKey = (profileId, container) => container ? profileId + '~' + container : profileId
+const partitionOf = (profileId, container) => isTemp(container) ? 'tmp-' + container
+  : container ? 'persist:' + profileId + '~' + container
+  : profileOf(profileId)?.ephemeral ? 'private-' + profileId : 'persist:' + profileId // privat: tanpa "persist:" = hanya di memori
+const containerOf = t => t?.container && !isTemp(t.container) ? profileOf(t.profileId)?.containers?.find(c => c.id === t.container) : null
+const tabCtx = t => profileCtx(t.profileId, t.container)
+// proxy per profil (container & tab sekali pakai ikut proxy profilnya). Electron: satu pengaturan proxy per sesi
+const PROXY_MODES = ['system', 'direct', 'fixed', 'pac']
+function proxyConfig(profileId) {
+  const x = profileOf(profileId)?.proxy
+  if (x?.mode === 'fixed' && x.rules) return { mode: 'fixed_servers', proxyRules: x.rules, proxyBypassRules: x.bypass || '<local>' }
+  if (x?.mode === 'pac' && x.pac) return { mode: 'pac_script', pacScript: x.pac }
+  return { mode: x?.mode === 'direct' ? 'direct' : 'system' }
+}
+const viaProxy = profileId => ['fixed_servers', 'pac_script'].includes(proxyConfig(profileId).mode)
+function applyProxy(profileId) {
+  for (const [k, c] of Object.entries(ctx)) if (k === profileId || k.startsWith(profileId + '~'))
+    c.ready = c.ses.setProxy(proxyConfig(profileId)).then(() => c.ses.closeAllConnections()).catch(e => console.error('proxy:', e.message))
+}
+// log request per tab (investigasi): domain yang dihubungi halaman, jumlah request, yang diblokir. Direset tiap pindah halaman.
+function logRequest(t, d) {
+  const host = hostOf(d.url)
+  if (!host) return
+  const log = t.reqs ||= new Map()
+  let r = log.get(host)
+  if (!r) { if (log.size >= 500) return; log.set(host, r = { n: 0, blocked: 0, types: new Set() }) }
+  r.n++
+  r.types.add(d.resourceType)
+}
+// kode HTTP halaman (termasuk redirect) -> badge di tab, mis. "301›200" atau "502". 200 biasa tanpa badge.
+const codeBadge = chain => chain.every(h => h.code >= 200 && h.code < 300) ? '' : chain.length > 3 ? `${chain[0].code}›…›${chain.at(-1).code}` : chain.map(h => h.code).join('›')
+
+function profileCtx(profileId, container) {
+  const key = ctxKey(profileId, container)
+  if (ctx[key]) return ctx[key]
+  const temp = isTemp(container) || !!profileOf(profileId)?.ephemeral
+  const ses = session.fromPartition(partitionOf(profileId, container))
   ses.setUserAgent(UA)
   ses.setSpellCheckerEnabled(true)
   ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'media-preload.js') }) // widget musik
-  if (!profileOf(profileId)?.ephemeral) ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'password-preload.js') }) // privat: tanpa autofill/simpan
+  if (!temp) ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'password-preload.js') }) // privat/sekali pakai: tanpa autofill/simpan
   // navigasi + XHR/fetch: login Google = UA dengan token Electron (Client Hints asli tetap dikirim);
   // situs lain tidak diubah, kecuali dipastikan kembali ke UA Chrome setelah keluar dari halaman login
   // + Do Not Track / Global Privacy Control, + kebijakan cookie (header Cookie dibuang)
@@ -565,7 +628,7 @@ function profileCtx(profileId) {
       subject: c.subject.commonName, subjectOrg: c.subject.organizations.join(', '),
       issuer: c.issuer.commonName, issuerOrg: c.issuer.organizations.join(', '),
       validStart: c.validStart, validExpiry: c.validExpiry, fingerprint: c.fingerprint, serial: c.serialNumber,
-      result: req.verificationResult, knownRoot: req.isIssuedByKnownRoot,
+      result: req.verificationResult, knownRoot: req.isIssuedByKnownRoot, san: sanOf(c.data),
     })
     cb(-3)
   })
@@ -592,8 +655,13 @@ function profileCtx(profileId) {
   }
   // Electron hanya menerima satu listener per event webRequest -> handler Ghostery dibungkus, bukan ditimpa
   ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+    const tab = details.webContents && tabByWc.get(details.webContents)
+    if (tab) logRequest(tab, details)
     if (details.resourceType === 'mainFrame' && /^https?:/.test(details.url)) {
       const u = new URL(details.url)
+      // situs mirip merek terkenal (paypa1.com, аpple.com): tahan dulu, tampilkan peringatan (did-fail-load -> halaman error)
+      const fake = tab && !lookalikeOk.has(u.hostname) && !isInternalHost(u.hostname) && lookalike(u.hostname)
+      if (fake) { tab.lookalike = { url: details.url, ...fake }; return callback({ cancel: true }) }
       if (focusOn() && state.focus.sites.some(s => u.hostname === s || u.hostname.endsWith('.' + s))) {
         win?.webContents.send('toast', `Focus mode: ${u.hostname} blocked (${Math.ceil((state.focus.until - Date.now()) / 60000)} min left)`)
         return callback({ cancel: true })
@@ -612,6 +680,14 @@ function profileCtx(profileId) {
   })
   ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, callback) => {
     const h = details.responseHeaders
+    const tab = details.resourceType === 'mainFrame' && details.webContents && tabByWc.get(details.webContents)
+    if (tab) { // kode HTTP & header respons halaman (Site info)
+      const prev = (tab.resp?.chain || []).filter((h, i, a) => !(i === a.length - 1 && h.url === details.url)) // ulang di URL sama (login 401) bukan redirect
+      const chain = [...prev, { code: details.statusCode, url: details.url }].slice(-10)
+      const headers = Object.entries(h || {}).flatMap(([k, vs]) => vs.map(v => [k, String(v).slice(0, 2000)])).slice(0, 200)
+      tab.resp = { chain, line: details.statusLine, headers, badge: codeBadge(chain) }
+      render()
+    }
     const key = h && Object.keys(h).find(k => k.toLowerCase() === 'set-cookie')
     if (key && dropCookies(details)) {
       const responseHeaders = { ...h }
@@ -624,12 +700,13 @@ function profileCtx(profileId) {
   const extensions = new ElectronChromeExtensions({
     license: 'GPL-3.0',
     session: ses,
-    createTab: async d => [newTab(d.url || engine().home, profileId, d.active !== false).view.webContents, win],
+    createTab: async d => [newTab(d.url || engine().home, profileId, d.active !== false, container).view.webContents, win],
     selectTab: wc => { const t = findTab(wc); if (t) selectTab(t) },
     removeTab: wc => { const t = findTab(wc); if (t) closeTab(t) },
-    createWindow: async d => { newTab([].concat(d.url || engine().home)[0], profileId); return win },
+    createWindow: async d => { newTab([].concat(d.url || engine().home)[0], profileId, true, container); return win },
   })
-  ctx[profileId] = { ses, extensions }
+  // proxy dipasang sebelum halaman pertama dimuat (wake menunggu ready), supaya tidak ada request yang lolos tanpa proxy
+  ctx[key] = { ses, extensions, ready: ses.setProxy(proxyConfig(profileId)).catch(e => console.error('proxy:', e.message)) }
   // ponytail: web store selalu memuat semua ekstensi di folder -> yang dinonaktifkan langsung di-unload lagi.
   ses.extensions.on('extension-loaded', (_, ext) => {
     if (extPrefs(profileId).disabled[ext.id]) setImmediate(() => ses.extensions.removeExtension(ext.id))
@@ -656,14 +733,17 @@ function profileCtx(profileId) {
     item.once('done', (_, st) => { learn(); d.received = item.getReceivedBytes(); d.state = st; liveDownloads.delete(d.id); downloadsChanged() })
     downloadsChanged()
   })
-  if (!profileOf(profileId)?.ephemeral) // privat: tanpa ekstensi (seperti incognito Chrome)
+  // ponytail: ekstensi hanya di sesi utama profil; container & privat tanpa ekstensi (seperti incognito Chrome)
+  if (!temp && !container)
     installChromeWebStore({ session: ses, extensionsPath: extDir(profileId) })
       .catch(e => console.error('web store:', e))
       .then(() => { for (const dir of extPrefs(profileId).unpacked) if (fs.existsSync(dir)) ses.extensions.loadExtension(dir).catch(e => console.error('unpacked:', dir, e.message)) })
-  return ctx[profileId]
+  return ctx[key]
 }
 
 const extDir = profileId => path.join(DATA, 'Extensions', profileId)
+// semua sesi tersimpan milik profil: sesi utama + tiap container (hapus data / hapus profil)
+const profileSessions = profileId => [ctx[profileId]?.ses || session.fromPartition(partitionOf(profileId)), ...(profileOf(profileId)?.containers || []).map(c => ctx[ctxKey(profileId, c.id)]?.ses || session.fromPartition(partitionOf(profileId, c.id)))]
 const extPrefs = profileId => { const p = (state.extPrefs[profileId] ||= { unpinned: [], disabled: {} }); p.unpacked ||= []; return p } // unpacked: folder ekstensi mode developer
 
 // Nama ekstensi bisa berupa "__MSG_appName__" -> ambil dari _locales
@@ -701,14 +781,15 @@ const pageView = ses => new WebContentsView({ webPreferences: { session: ses, sa
 // view: halaman yang sudah termuat (Glance dijadikan tab) -> tidak dimuat ulang
 function wake(t, view) {
   if (!t.url) return // tab baru kosong: halaman Almac di UI, belum ada webContents
-  const { ses, extensions } = profileCtx(t.profileId)
-  t.view = view || pageView(ses)
+  const c = tabCtx(t)
+  t.view = view || pageView(c.ses)
   t.view.setBorderRadius(10)
   const wc = t.view.webContents
-  extensions.addTab(wc, win)
+  tabByWc.set(wc, t)
+  c.extensions.addTab(wc, win)
   wc.setWindowOpenHandler(({ url, disposition }) => {
     if (disposition === 'new-window') return { action: 'allow' } // popup login (OAuth) butuh window.opener
-    const n = newTab(url, t.profileId, disposition !== 'background-tab')
+    const n = newTab(url, t.profileId, disposition !== 'background-tab', t.container) // tetap di container yang sama
     if (disposition === 'background-tab') n.lastActive = (t.lastActive || Date.now()) - 1
     return { action: 'deny' }
   })
@@ -720,11 +801,11 @@ function wake(t, view) {
     if (wc.getUserAgent() !== want) wc.setUserAgent(want)
   })
   wc.on('focus', () => { // klik di panel split lain -> panel itu jadi tab aktif (kolom alamat ikut)
-    if (t !== activeTab() && isShown(t)) { t.lastActive = Date.now(); profileCtx(t.profileId).extensions.selectTab(wc); render(true) }
+    if (t !== activeTab() && isShown(t)) { t.lastActive = Date.now(); tabCtx(t).extensions.selectTab(wc); render(true) }
   })
   wc.on('media-started-playing', () => { musicTab = t })
   wc.on('audio-state-changed', () => render()) // ikon speaker di tab
-  wc.on('context-menu', (_, p) => pageMenu(wc, t.profileId, p).popup({ window: win }))
+  wc.on('context-menu', (_, p) => pageMenu(wc, t, p).popup({ window: win }))
   wc.on('dom-ready', () => applyBoost(wc))
   // renderer crash: tab di belakang ditidurkan (dimuat ulang saat dipilih), tab yang tampil -> tanya muat ulang
   wc.on('render-process-gone', (_, d) => {
@@ -736,17 +817,19 @@ function wake(t, view) {
   // halaman gagal dimuat -> halaman error Almac (bukan layar putih)
   wc.on('did-fail-load', (_, code, desc, url, isMainFrame) => {
     if (!isMainFrame || code === -3) return // -3 = dibatalkan (pindah halaman, tombol stop)
+    if (t.lookalike?.url === url) { const l = t.lookalike; t.lookalike = null; return setLoadError(t, { kind: 'lookalike', code: 'LOOKALIKE_DOMAIN', url, host: hostOf(url), shown: l.host, target: l.target }) }
     const https = url.replace(/^http:/, 'https:') // juga kasus https -> redirect balik ke http (loop)
     if (upgraded.has(https)) { // HTTPS-Only: versi https gagal -> tawarkan http
       upgraded.delete(https)
       return setLoadError(t, { kind: 'https', code: desc, url: url.replace(/^https:/, 'http:'), host: hostOf(url) })
     }
     const cert = t.certError?.url === url && t.certError
-    if (cert || (code <= -200 && code > -300)) return setLoadError(t, { kind: 'cert', code: desc, url, host: hostOf(url), text: CERT_TEXT[desc] || 'The site\'s security certificate is not valid.', issuer: cert?.issuer || '' })
+    if (cert || (code <= -200 && code > -300)) return setLoadError(t, { kind: 'cert', code: desc, url, host: hostOf(url), text: CERT_TEXT['net::' + desc.replace(/^net::/, '')] || 'The site\'s security certificate is not valid.', issuer: cert?.issuer || '', internal: isInternalHost(hostOf(url)), changed: !!cert?.changed })
     setLoadError(t, { kind: 'net', code: desc, url, host: hostOf(url), dns: code === -105 && state.dnsMode === 'doh' })
   })
   wc.on('did-start-navigation', ({ url, isMainFrame, isSameDocument }) => {
     if (!isMainFrame || isSameDocument) return
+    t.resp = null; t.reqs = null // log request & header respons milik halaman baru
     if (t.loadError) { t.loadError = null; layout(); render() }
     clearTimeout(t.httpsTimer)
     // HTTPS-First: versi https tidak menjawab dalam 5 detik -> hentikan & tawarkan http (Chrome: 3 detik)
@@ -758,10 +841,27 @@ function wake(t, view) {
     }, 5000)
   })
   wc.on('did-navigate', (_, url) => { clearTimeout(t.httpsTimer); upgraded.delete(url) })
+  // HTTP 4xx/5xx tanpa isi (mis. 502 kosong) = layar putih -> halaman error seperti Chrome "HTTP ERROR 500"
+  wc.on('did-navigate', (_, url, status) => { t.httpStatus = status })
+  wc.on('did-finish-load', () => {
+    const url = wc.getURL(), status = t.httpStatus
+    if (!(status >= 400) || t.loadError) return
+    wc.executeJavaScript('!document.body || (!document.body.innerText.trim() && !document.body.querySelector("img,svg,video,canvas,iframe,object,embed"))', true)
+      .then(empty => { if (empty && !wc.isDestroyed() && wc.getURL() === url) setLoadError(t, { kind: 'http', code: `HTTP ERROR ${status}`, url, host: hostOf(url) }) })
+      .catch(() => {})
+  })
   wc.on('found-in-page', (_, r) => { if (t === activeTab()) win?.webContents.send('find-result', { active: r.activeMatchOrdinal, matches: r.matches }) })
   // zoom per situs: terapkan zoom tersimpan setiap pindah halaman
   wc.on('did-navigate', () => { const z = state.zoom[hostOf(wc.getURL())]; if (z && z !== 1) wc.setZoomFactor(z) })
   wc.on('did-navigate', () => { t.blockedSeen = null; sync(true); if (t.pendingPw) setTimeout(() => pwOffer(t), 600) })
+  // sertifikat habis dalam 14 hari -> beri tahu sekali per sesi (berguna untuk audit server sendiri)
+  wc.on('did-navigate', (_, url) => {
+    const host = hostOf(url), c = /^https:/.test(url) && certs.get(t.profileId + '|' + host)
+    const days = c ? Math.floor((c.validExpiry * 1000 - Date.now()) / 864e5) : Infinity
+    if (days > 14 || expiryWarned.has(host)) return
+    expiryWarned.add(host)
+    toast(days < 0 ? `Certificate for ${host} has expired` : `Certificate for ${host} expires in ${days} ${days === 1 ? 'day' : 'days'}`)
+  })
   wc.on('did-navigate-in-page', (_, url, isMainFrame) => { if (isMainFrame) { sync(true); if (t.pendingPw) setTimeout(() => pwOffer(t), 600) } })
   wc.on('page-title-updated', () => sync(false))
   wc.on('page-favicon-updated', (_, icons) => {
@@ -775,7 +875,15 @@ function wake(t, view) {
     }
     render()
   })
-  if (!view) wc.loadURL(t.url)
+  if (!view) c.ready.then(() => { if (!wc.isDestroyed()) wc.loadURL(t.url) })
+}
+
+// tab sekali pakai terakhir ditutup: cookie, cache, storage sesinya dibuang
+function dropTemp(profileId, container) {
+  const key = ctxKey(profileId, container), c = ctx[key]
+  if (!c) return
+  delete ctx[key]
+  c.ses.clearData().catch(() => {})
 }
 
 function sleep(t) {
@@ -822,7 +930,7 @@ function layout() {
 
 // ---- Glance (Zen) / Peek (Arc): ⌥+klik link -> halaman melayang di atas tab. Esc / klik latar = tutup, "Open as tab" = jadi tab ----
 const GLANCE_BAR = 34 // toolbar UI di atas kotak glance
-let glance = null // { view, profileId }
+let glance = null // { view, profileId, container }
 function glanceBounds() {
   const [w, h] = win.getContentSize()
   const x = sideSpace() + GAP, y = GAP + barSpace(), W = Math.max(w - x - GAP, 0), H = Math.max(h - y - GAP, 0)
@@ -834,18 +942,19 @@ function glanceInfo(extra) {
   const wc = glance.view.webContents
   win?.webContents.send('glance', { url: wc.getURL() || glance.url, title: wc.getTitle(), bounds: glanceBounds(), bar: GLANCE_BAR, ...extra })
 }
-async function openGlance(url, profileId = state.activeProfile) {
+async function openGlance(url, profileId = state.activeProfile, container) {
   if (!win || !/^https?:/.test(url || '')) return
   if (glance) return glance.view.webContents.loadURL(url)
   const snap = await snapshot()
-  const view = pageView(profileCtx(profileId).ses)
+  const c = profileCtx(profileId, container)
+  const view = pageView(c.ses)
   view.setBorderRadius(10)
-  glance = { view, profileId, url }
+  glance = { view, profileId, container, url }
   const wc = view.webContents
   const mine = () => glance?.view === view // listener mati sendiri setelah glance ditutup / jadi tab
   for (const ev of ['page-title-updated', 'did-navigate', 'did-navigate-in-page']) wc.on(ev, () => mine() && glanceInfo())
   wc.on('dom-ready', () => mine() && applyBoost(wc))
-  wc.on('context-menu', (_, p) => mine() && pageMenu(wc, profileId, p).popup({ window: win }))
+  wc.on('context-menu', (_, p) => mine() && pageMenu(wc, { profileId, container }, p).popup({ window: win }))
   wc.on('before-input-event', (e, i) => {
     if (!mine() || i.type !== 'keyDown') return
     if (i.key === 'Escape') { e.preventDefault(); closeGlance() }
@@ -853,11 +962,12 @@ async function openGlance(url, profileId = state.activeProfile) {
   })
   wc.setWindowOpenHandler(({ url, disposition }) => {
     if (disposition === 'new-window') return { action: 'allow' }
-    newTab(url, profileId, disposition !== 'background-tab')
+    newTab(url, profileId, disposition !== 'background-tab', container)
     return { action: 'deny' }
   })
   glanceInfo({ open: true, snap })
   layout()
+  await c.ready
   wc.loadURL(url)
   wc.focus()
 }
@@ -915,13 +1025,13 @@ function selectTab(t) {
   profileOf(t.profileId).activeWs = t.wsId
   if (!t.view) wake(t)
   layout()
-  if (t.view) profileCtx(t.profileId).extensions.selectTab(t.view.webContents)
+  if (t.view) tabCtx(t).extensions.selectTab(t.view.webContents)
   render()
 }
 
 const newTabUrl = () => state.newTabPage === 'engine' ? engine().home : '' // '' = halaman Almac
-function newTab(url = newTabUrl(), profileId = state.activeProfile, focus = true) {
-  const t = { id: nextTabId++, profileId, wsId: activeWs(profileId), url, title: '', blocked: 0, lastActive: Date.now(), view: null }
+function newTab(url = newTabUrl(), profileId = state.activeProfile, focus = true, container) {
+  const t = { id: nextTabId++, profileId, wsId: activeWs(profileId), url, title: '', blocked: 0, lastActive: Date.now(), view: null, ...(container && { container }) }
   state.tabs.push(t)
   wake(t)
   focus ? selectTab(t) : render()
@@ -935,10 +1045,11 @@ function unsplit(t) {
 }
 
 function closeTab(t) {
-  if (t.url && !profileOf(t.profileId)?.ephemeral) { closedTabs.push({ url: t.url, profileId: t.profileId, wsId: t.wsId }); if (closedTabs.length > 20) closedTabs.shift() }
+  if (t.url && !profileOf(t.profileId)?.ephemeral && !isTemp(t.container)) { closedTabs.push({ url: t.url, profileId: t.profileId, wsId: t.wsId, container: t.container }); if (closedTabs.length > 20) closedTabs.shift() }
   unsplit(t)
   sleep(t)
   state.tabs = state.tabs.filter(x => x !== t)
+  if (isTemp(t.container) && !state.tabs.some(x => x.container === t.container)) dropTemp(t.profileId, t.container)
   const next = activeTab()
   next ? selectTab(next) : (layout(), render())
 }
@@ -957,10 +1068,11 @@ function goTo(url) {
 // ---- menu klik kanan halaman (Electron tidak punya menu bawaan), isinya mengikuti Chrome ----
 const translateLang = () => (app.getPreferredSystemLanguages()[0] || 'en').split('-')[0]
 const translateUrl = url => `https://translate.google.com/translate?sl=auto&tl=${translateLang()}&u=${encodeURIComponent(url)}`
-function pageMenu(wc, profileId, p) {
+function pageMenu(wc, { profileId, container }, p) {
   const items = []
   const group = (...xs) => { if (items.length && xs.length) items.push({ type: 'separator' }); items.push(...xs) }
-  const open = url => newTab(url, profileId, false)
+  const open = url => newTab(url, profileId, false, container)
+  const containers = profileOf(profileId)?.containers || []
   const sel = p.selectionText.trim()
   if (p.misspelledWord) group(
     ...p.dictionarySuggestions.slice(0, 5).map(w => ({ label: w, click: () => wc.replaceMisspelling(w) })),
@@ -968,8 +1080,13 @@ function pageMenu(wc, profileId, p) {
     { label: 'Add to Dictionary', click: () => wc.session.addWordToSpellCheckerDictionary(p.misspelledWord) })
   if (p.linkURL) group(
     { label: 'Open Link in New Tab', click: () => open(p.linkURL) },
-    ...(/^https?:/.test(p.linkURL) ? [{ label: 'Open Link in Glance (⌥-click)', click: () => openGlance(p.linkURL, profileId) }] : []),
+    ...(/^https?:/.test(p.linkURL) ? [{ label: 'Open Link in Glance (⌥-click)', click: () => openGlance(p.linkURL, profileId, container) }] : []),
     { label: 'Open Link in Private Tab', click: () => commands.openPrivate(p.linkURL) },
+    ...(/^https?:/.test(p.linkURL) ? [{ label: 'Open Link in Disposable Tab', click: () => commands.openDisposable(p.linkURL) }] : []),
+    ...(containers.length && /^https?:/.test(p.linkURL) && !profileOf(profileId)?.ephemeral ? [{ label: 'Open Link in Container', submenu: [
+      { label: 'No container', enabled: !!container, click: () => newTab(p.linkURL, profileId, true) },
+      ...containers.map(c => ({ label: c.name, enabled: c.id !== container, click: () => newTab(p.linkURL, profileId, true, c.id) })),
+    ] }] : []),
     { label: 'Copy Link Address', click: () => clipboard.writeText(p.linkURL) })
   if (p.mediaType === 'image') group(
     { label: 'Open Image in New Tab', click: () => open(p.srcURL) },
@@ -1087,6 +1204,7 @@ const commands = {
   },
   removeProfile: id => {
     if (state.profiles.length < 2) return
+    const sessions = profileSessions(id)
     state.tabs.filter(t => t.profileId === id).forEach(sleep)
     state.tabs = state.tabs.filter(t => t.profileId !== id)
     state.profiles = state.profiles.filter(p => p.id !== id)
@@ -1096,7 +1214,7 @@ const commands = {
     bookmarks = bookmarks.filter(b => b.p !== id)
     saveBookmarks()
     delete state.sitePerms[id]
-    session.fromPartition('persist:' + id).clearData()
+    for (const ses of sessions) ses.clearData()
     commands.switchProfile(state.profiles[0].id)
   },
   ready: render, // UI baru dimuat/reload -> kirim state
@@ -1166,7 +1284,9 @@ const commands = {
     render()
   },
   siteClearData: async origin => {
-    const { ses } = profileCtx(state.activeProfile)
+    const t = activeTab()
+    if (!t) return
+    const { ses } = tabCtx(t)
     const host = new URL(origin).hostname
     const domain = getDomain(host) || host // hapus untuk seluruh domain, mis. mail.google.com -> google.com
     const cookies = await ses.cookies.get({ domain })
@@ -1178,25 +1298,26 @@ const commands = {
   },
 
   clearCache: async () => {
-    const { ses } = profileCtx(state.activeProfile)
-    await ses.clearCache()
+    for (const ses of profileSessions(state.activeProfile)) await ses.clearCache()
   },
   clearCookies: async () => {
-    const { ses } = profileCtx(state.activeProfile)
-    await ses.clearStorageData({ storages: SITE_STORAGES })
-    const cookies = await ses.cookies.get({})
-    await Promise.all(cookies.map(c => ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})))
+    for (const ses of profileSessions(state.activeProfile)) {
+      await ses.clearStorageData({ storages: SITE_STORAGES })
+      const cookies = await ses.cookies.get({})
+      await Promise.all(cookies.map(c => ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})))
+    }
     // tutup semua tab dan buka tab baru
     const profileId = state.activeProfile
     state.tabs.filter(t => t.profileId === profileId && t.view).forEach(t => { t.view.webContents.reload() })
   },
   clearAll: async () => {
     const profileId = state.activeProfile
-    const { ses } = profileCtx(profileId)
-    await ses.clearCache()
-    await ses.clearStorageData({ storages: SITE_STORAGES })
-    const cookies = await ses.cookies.get({})
-    await Promise.all(cookies.map(c => ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})))
+    for (const ses of profileSessions(profileId)) {
+      await ses.clearCache()
+      await ses.clearStorageData({ storages: SITE_STORAGES })
+      const cookies = await ses.cookies.get({})
+      await Promise.all(cookies.map(c => ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {})))
+    }
     history = history.filter(h => h.p !== profileId)
     saveHistory()
     state.tabs.filter(t => t.profileId === profileId && t.view).forEach(t => { t.view.webContents.reload() })
@@ -1521,7 +1642,7 @@ const commands = {
     if (!p) return commands.reopenTab()
     state.activeProfile = p.id
     if (p.workspaces.some(w => w.id === c.wsId)) p.activeWs = c.wsId
-    newTab(c.url, p.id)
+    newTab(c.url, p.id, true, p.containers?.some(x => x.id === c.container) ? c.container : undefined)
   },
   reloadTab: id => state.tabs.find(t => t.id === id)?.view?.webContents.reload(),
   errRetry: () => {
@@ -1540,12 +1661,85 @@ const commands = {
     else { t.url = newTabUrl(); sleep(t) } // tidak ada halaman sebelumnya -> halaman awal
     layout(); render(true)
   },
-  certProceed: () => {
+  certProceed: remember => {
     const t = activeTab(), e = t?.loadError
     if (e?.kind !== 'cert' || !t.certError?.fingerprint) return
     certAllowed.set(e.host, t.certError.fingerprint)
+    if (remember) state.certTrust[e.host] = t.certError.fingerprint
     commands.errRetry()
   },
+  certForget: host => { delete state.certTrust[host]; certAllowed.delete(host); render(true) },
+  lookalikeProceed: () => {
+    const e = activeTab()?.loadError
+    if (e?.kind !== 'lookalike') return
+    lookalikeOk.add(e.host)
+    commands.errRetry()
+  },
+  lookalikeGo: () => {
+    const t = activeTab(), e = t?.loadError
+    if (e?.kind !== 'lookalike' || !e.target) return
+    t.loadError = null
+    goTo('https://' + e.target)
+    layout(); render(true)
+  },
+
+  // ---- container & tab sekali pakai ----
+  openDisposable: url => {
+    const p = profileOf(state.activeProfile)
+    if (p.ephemeral) return newTab(url) // privat sudah sekali pakai
+    newTab(typeof url === 'string' ? url : undefined, p.id, true, uid('tmp'))
+  },
+  newTabIn: container => {
+    const p = profileOf(state.activeProfile)
+    if (container !== 'tmp' && !p.containers?.some(c => c.id === container)) return
+    newTab(undefined, p.id, true, container === 'tmp' ? uid('tmp') : container)
+  },
+  // seperti Firefox "Reopen in Container": tab baru dengan URL yang sama di container lain, tab lama ditutup
+  reopenIn: ({ id, container }) => {
+    const t = state.tabs.find(t => t.id === id), p = profileOf(t?.profileId)
+    if (!t || p.ephemeral || (container && container !== 'tmp' && !p.containers?.some(c => c.id === container))) return
+    const n = newTab(t.url || undefined, t.profileId, true, container === 'tmp' ? uid('tmp') : container || undefined)
+    if (t.pinned) { n.pinned = true; n.pinUrl = t.pinUrl }
+    if (t.tg) n.tg = t.tg
+    state.tabs.splice(state.tabs.indexOf(n), 1)
+    state.tabs.splice(state.tabs.indexOf(t), 0, n) // posisi sama di sidebar
+    closeTab(t)
+    selectTab(n)
+  },
+  containerAdd: ({ name, color } = {}) => {
+    const p = profileOf(state.activeProfile)
+    if (p.ephemeral) return
+    ;(p.containers ||= []).push({ id: uid('c'), name: String(name || '').trim().slice(0, 24) || 'Container ' + (p.containers.length + 1), color: /^#[0-9a-f]{6}$/i.test(color || '') ? color : TG_COLORS[p.containers.length % TG_COLORS.length] })
+    render(true)
+  },
+  containerUpdate: ({ id, name, color }) => {
+    const c = profileOf(state.activeProfile).containers?.find(c => c.id === id)
+    if (!c) return
+    if (String(name || '').trim()) c.name = String(name).trim().slice(0, 24)
+    if (/^#[0-9a-f]{6}$/i.test(color || '')) c.color = color
+    render(true)
+  },
+  containerRemove: id => { // tab-nya ditutup, cookie & data container dihapus
+    const p = profileOf(state.activeProfile)
+    if (!p.containers?.some(c => c.id === id)) return
+    for (const t of state.tabs.filter(t => t.profileId === p.id && t.container === id)) { unsplit(t); sleep(t) }
+    state.tabs = state.tabs.filter(t => !(t.profileId === p.id && t.container === id))
+    p.containers = p.containers.filter(c => c.id !== id)
+    const key = ctxKey(p.id, id)
+    ;(ctx[key]?.ses || session.fromPartition(partitionOf(p.id, id))).clearData().catch(() => {})
+    delete ctx[key]
+    const next = activeTab()
+    next ? selectTab(next) : (layout(), render(true))
+  },
+  proxySet: ({ mode, rules = '', bypass = '', pac = '' }) => {
+    const p = profileOf(state.activeProfile)
+    if (!PROXY_MODES.includes(mode)) return
+    p.proxy = { mode, rules: String(rules).trim().slice(0, 500), bypass: String(bypass).trim().slice(0, 1000), pac: String(pac).trim().slice(0, 2000) }
+    applyProxy(p.id)
+    toast(mode === 'system' ? 'Proxy: using system settings' : mode === 'direct' ? 'Proxy: off (direct connection)' : 'Proxy saved for profile ' + p.name)
+    render(true)
+  },
+  authAnswer: ({ id, username, password }) => { const cb = pendingAuth.get(id); pendingAuth.delete(id); username ? cb?.(String(username), String(password || '')) : cb?.() },
   httpProceed: () => {
     const t = activeTab(), e = t?.loadError
     if (e?.kind !== 'https' || !/^http:/.test(e.url)) return
@@ -1602,9 +1796,9 @@ const commands = {
   glanceClose: () => closeGlance(),
   glanceExpand: () => {
     if (!glance) return
-    const { view, profileId, url } = glance
+    const { view, profileId, container, url } = glance
     closeGlance(true)
-    const t = { id: nextTabId++, profileId, wsId: activeWs(profileId), url: view.webContents.getURL() || url, title: view.webContents.getTitle(), blocked: 0, lastActive: Date.now(), view: null }
+    const t = { id: nextTabId++, profileId, wsId: activeWs(profileId), url: view.webContents.getURL() || url, title: view.webContents.getTitle(), blocked: 0, lastActive: Date.now(), view: null, ...(container && { container }) }
     state.tabs.push(t)
     wake(t, view)
     selectTab(t)
@@ -1816,15 +2010,42 @@ queries.siteInfo = async () => {
   try { u = new URL(t.url) } catch { return null }
   const web = u.protocol === 'https:' || u.protocol === 'http:'
   const domain = web ? getDomain(u.hostname) || u.hostname : ''
-  const cookies = web ? await profileCtx(t.profileId).ses.cookies.get({ domain }) : []
+  const { ses } = tabCtx(t)
+  const ipOf = h => ses.resolveHost(h.replace(/^\[|\]$/g, '')).then(r => [...new Set(r.endpoints.map(e => e.address))]).catch(() => [])
+  const [cookies, ips, tls] = await Promise.all([
+    web ? ses.cookies.get({ domain }) : [],
+    web ? ipOf(u.hostname) : [],
+    u.protocol === 'https:' && !viaProxy(t.profileId) ? tlsProbe(u.hostname, u.port) : null,
+  ])
+  const cert = certs.get(t.profileId + '|' + u.hostname) || null
   return {
     url: t.url, origin: u.origin, host: u.hostname, domain, protocol: u.protocol, favicon: t.favicon,
-    cert: certs.get(t.profileId + '|' + u.hostname) || null,
+    cert: cert && { ...cert, daysLeft: Math.floor((cert.validExpiry * 1000 - Date.now()) / 864e5), trusted: !!state.certTrust[u.hostname] },
     cookies: cookies.length, blocked: t.blocked, perms: sitePermsOf(t.profileId, u.origin),
+    ips, tls, proxy: viaProxy(t.profileId), resp: t.resp ? { chain: t.resp.chain, line: t.resp.line, headers: t.resp.headers } : null,
+    requests: t.reqs ? [...t.reqs.values()].reduce((a, r) => a + r.n, 0) : 0, domains: t.reqs?.size || 0,
+    container: containerOf(t)?.name || (isTemp(t.container) ? 'Disposable' : ''),
+    device: vault.unlocked() ? vault.data.devices?.[deviceKey(u.hostname)] || null : undefined, // undefined = brankas terkunci
   }
 }
+// log request tab aktif: domain, jumlah, diblokir, pihak pertama/ketiga, IP (diresolve saat dibuka)
+queries.requestLog = async () => {
+  const t = activeTab()
+  if (!t?.reqs) return { host: hostOf(t?.url), rows: [] }
+  const { ses } = tabCtx(t)
+  const site = getDomain(hostOf(t.url)) || hostOf(t.url)
+  const rows = await Promise.all([...t.reqs].map(async ([host, r]) => ({
+    host, n: r.n, blocked: r.blocked, types: [...r.types].join(', '), third: (getDomain(host) || host) !== site,
+    ip: await Promise.race([ses.resolveHost(host.replace(/^\[|\]$/g, '')).then(x => x.endpoints[0]?.address || '', () => ''), new Promise(r => setTimeout(() => r(''), 1500))]),
+  })))
+  return { host: hostOf(t.url), url: t.url, rows: rows.sort((a, b) => a.third - b.third || b.n - a.n) }
+}
+queries.certTrust = () => Object.keys(state.certTrust).sort()
 // ---- Almac Passwords: perintah dari UI ----
 const needVault = fn => (...a) => { if (!vault.unlocked()) throw new Error('Passwords are locked'); pwTouch(); return fn(...a) }
+// catatan perangkat internal (IP, VLAN, PIC, catatan) per host, disimpan terenkripsi di brankas yang sama dengan password
+const deviceKey = host => String(host || '').toLowerCase().replace(/^www\./, '')
+const DEVICE_FIELDS = ['ip', 'vlan', 'pic', 'notes']
 Object.assign(queries, {
   pwSetup: password => {
     if (typeof password !== 'string' || password.length < 8) throw new Error('Master password must be at least 8 characters')
@@ -1874,6 +2095,20 @@ Object.assign(queries, {
   pwSave: needVault(entry => { pwUpsert(entry); vault.save(); return true }),
   pwDelete: needVault(id => { vault.data.entries = vault.data.entries.filter(e => e.id !== id); vault.save(); return true }),
   pwGenerate: () => passwords.generate(),
+  deviceSave: needVault(({ host, ...f }) => {
+    const key = deviceKey(host)
+    if (!key) throw new Error('Host is required')
+    const d = Object.fromEntries(DEVICE_FIELDS.map(k => [k, String(f[k] || '').trim().slice(0, k === 'notes' ? 5000 : 200)]))
+    vault.data.devices ||= {}
+    if (DEVICE_FIELDS.some(k => d[k])) vault.data.devices[key] = { ...d, updated: Date.now() }
+    else delete vault.data.devices[key]
+    vault.save(); return true
+  }),
+  deviceList: needVault((q = '') => {
+    q = q.trim().toLowerCase()
+    return Object.entries(vault.data.devices || {}).map(([host, d]) => ({ host, ...d }))
+      .filter(d => !q || Object.values(d).join(' ').toLowerCase().includes(q)).sort((a, b) => a.host.localeCompare(b.host))
+  }),
   // import CSV dari Apple Passwords (File > Export Passwords) / Chrome / Brave / Edge
   pwImport: needVault(async () => {
     const r = await dialog.showOpenDialog(win, { title: 'Import passwords (CSV)', filters: [{ name: 'CSV', extensions: ['csv'] }], properties: ['openFile'] })
@@ -1919,7 +2154,7 @@ ipcMain.on('glance', (e, url) => {
   if (typeof url !== 'string' || !/^https?:/.test(url)) return
   if (glance?.view.webContents === e.sender) return glance.view.webContents.loadURL(url)
   const t = state.tabs.find(t => t.view?.webContents === e.sender)
-  if (t) openGlance(url, t.profileId)
+  if (t) openGlance(url, t.profileId, t.container)
 })
 
 // ---- Almac Passwords: dari halaman web (password-preload.js) ----
@@ -2217,6 +2452,7 @@ function buildMenu() {
         { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => { commands.newTab(); send('focus-url')() } },
         { label: 'New Tab', accelerator: 'CmdOrCtrl+N', visible: false, click: () => { commands.newTab(); send('focus-url')() } }, // Chrome: jendela baru; Almac satu jendela
         { label: 'New Incognito Tab', accelerator: 'CmdOrCtrl+Shift+N', click: () => commands.openPrivate() },
+        { label: 'New Disposable Tab', accelerator: 'CmdOrCtrl+Alt+N', click: () => { commands.openDisposable(); send('focus-url')() } },
         { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => commands.reopenTab() },
         { label: 'Open Location…', accelerator: 'CmdOrCtrl+L', click: send('focus-url') },
         { label: 'Quick Search', accelerator: QUICK_KEY, registerAccelerator: false, click: () => toggleSpotlight() }, // shortcut global, didaftarkan lewat globalShortcut
@@ -2260,6 +2496,9 @@ function buildMenu() {
             { label: 'Developer Tools', accelerator: 'F12', visible: false, click: () => commands.devtools() },
             { label: 'Inspect Elements', accelerator: 'CmdOrCtrl+Alt+C', click: () => commands.devInspect() },
             { label: 'JavaScript Console', accelerator: 'CmdOrCtrl+Alt+J', click: () => commands.devConsole() },
+            { type: 'separator' },
+            { label: 'Site Info & Certificate', click: send('open-site-info') },
+            { label: 'Request Log', accelerator: 'CmdOrCtrl+Alt+L', click: send('open-request-log') },
             { type: 'separator' },
             { label: 'Load Unpacked Extension…', click: () => commands.extLoadUnpacked() },
           ],
@@ -2356,8 +2595,14 @@ app.whenReady().then(async () => {
         executeJavaScript: (js, gesture) => skipScriptlet(js) ? null : e.senderFrame?.executeJavaScript(`(function(){${js}\n})()`, gesture).catch(() => {}),
       },
     }, url, msg)
+    blocker.on('request-redirected', req => {
+      const logged = state.tabs.find(t => t.view?.webContents.id === req.tabId)?.reqs?.get(hostOf(req.url))
+      if (logged) logged.blocked++
+    })
     blocker.on('request-blocked', req => {
       const t = state.tabs.find(t => t.view?.webContents.id === req.tabId)
+      const logged = t?.reqs?.get(hostOf(req.url))
+      if (logged) logged.blocked++
       // hitung URL unik per halaman: beberapa skrip iklan mengulang request yang diblokir ribuan kali per detik
       if (!t || t.blockedSeen?.has(req.url)) return
       ;(t.blockedSeen ||= new Set()).add(req.url)
@@ -2432,10 +2677,22 @@ app.whenReady().then(async () => {
 // sertifikat tidak valid: ditolak (Electron default), kecuali user memilih "Proceed anyway" untuk sertifikat yang sama persis
 app.on('certificate-error', (event, wc, url, error, certificate, callback, isMainFrame) => {
   const host = hostOf(url)
-  if (certAllowed.get(host) === certificate.fingerprint) { event.preventDefault(); return callback(true) }
+  if (certAllowed.get(host) === certificate.fingerprint || state.certTrust[host] === certificate.fingerprint) { event.preventDefault(); return callback(true) }
   callback(false)
   const t = isMainFrame && state.tabs.find(t => t.view?.webContents === wc)
-  if (t) t.certError = { url, error, fingerprint: certificate.fingerprint, issuer: certificate.issuerName }
+  if (t) t.certError = { url, error, fingerprint: certificate.fingerprint, issuer: certificate.issuerName, changed: !!state.certTrust[host] }
+})
+
+// login HTTP Basic/Digest (panel router, iLO, ...) & proxy yang minta password: Electron menolak semua tanpa handler ini
+const pendingAuth = new Map()
+let authSeq = 0
+app.on('login', (event, wc, details, auth, callback) => {
+  if (!win) return
+  event.preventDefault()
+  const id = ++authSeq
+  pendingAuth.set(id, callback)
+  win.focus()
+  win.webContents.send('auth-request', { id, host: auth.host + (auth.port && ![80, 443].includes(auth.port) ? ':' + auth.port : ''), realm: auth.realm, proxy: auth.isProxy, scheme: auth.scheme })
 })
 
 app.on('window-all-closed', () => app.quit())

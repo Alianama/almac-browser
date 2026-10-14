@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.3.6-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.3.7-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
@@ -41,7 +41,17 @@
 - **Global Privacy Control** — sent together with Do Not Track
 - **Private session auto-delete** after a chosen idle time
 - **Crashed tab recovery** — reload prompt instead of a blank page
+- **Look-alike site warning** — paypa1.com, аpple.com (Cyrillic letters), paypal-secure-login.com: "Is this the site you want?" before the page loads
+- **Disposable tabs (⌘⌥N)** — open a suspicious link in a throwaway in-memory session, wiped when the tab closes
+- **Containers** (like Firefox) — separate cookies & logins inside one profile, e.g. several AWS / Azure / GCP accounts in one workspace
+- **Proxy per profile** — system, none, manual (HTTP / SOCKS5, e.g. an `ssh -D` tunnel) or PAC; proxy and HTTP Basic sign-in boxes
 
+### 🧰 For IT & security work
+- **Site info** — certificate issuer, validity, SAN, SHA-256, TLS version, cipher & key exchange, server IP; warning when a certificate expires within 14 days
+- **HTTP status & headers** — status badge on tabs for errors and redirects (`502`, `301›200`); response headers with a HSTS / CSP / X-Frame-Options checklist
+- **Request log (⌘⌥L)** — every domain the page contacted, request count, blocked count, first/third party, IP; copy as CSV
+- **Remembered self-signed certificates** — routers, firewalls, iLO/iDRAC, Proxmox, NAS: trust once, pinned to the fingerprint (asks again if it changes)
+- **Device notes** — IP, VLAN, PIC and notes per host, encrypted in the password vault
 ### 🔑 Almac Passwords
 - Built-in password manager: **AES-256-GCM** vault, key derived from your master password (PBKDF2-SHA256, 600k iterations). Same scheme as Almac Remote
 - Bitwarden-style autofill: cat icon in login fields, dropdown on focus, email-first sign-ins, **⌘⇧L** to fill; strong password generator
