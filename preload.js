@@ -4,6 +4,7 @@ const { injectBrowserAction } = require('electron-chrome-extensions/browser-acti
 injectBrowserAction() // <browser-action-list> untuk ikon ekstensi
 
 contextBridge.exposeInMainWorld('almac', {
+  platform: process.platform,
   cmd: (type, arg) => ipcRenderer.send('cmd', type, arg),
   onState: fn => ipcRenderer.on('state', (_, s) => fn(s)),
   onFocusUrl: fn => ipcRenderer.on('focus-url', fn),

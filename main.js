@@ -11,6 +11,8 @@ const passwords = require('./passwords')
 const { createUpdater } = require('./updater')
 
 app.setName('Almac Browser')
+const MAC = process.platform === 'darwin' // Windows/Linux: bingkai jendela, shortcut & path import berbeda (satu codebase)
+const QUICK_KEY = MAC ? 'Alt+Space' : 'Alt+Shift+Space' // Windows: Alt+Space = menu jendela sistem
 app.setAboutPanelOptions({ applicationName: 'Almac Browser', applicationVersion: app.getVersion(), iconPath: path.join(__dirname, 'build', 'icon.png') })
 if (process.env.ALMAC_TEST_DATA) app.setPath('userData', process.env.ALMAC_TEST_DATA) // tes: folder data terpisah
 // Satu instance saja: dua instance di folder data yang sama bisa merusak database (cookies, service worker)
@@ -82,7 +84,7 @@ let modalOpen = false // modal pixel terbuka -> halaman web (native view) disemb
 let covered = false   // dropdown bookmark bar terbuka -> halaman diganti snapshot
 const BAR_H = 24 // tinggi bookmark bar (samakan dengan --bar-h di theme.css); bar di y=5, halaman 5px di bawahnya
 let findOpen = false // kotak cari di halaman (⌘F) memakai strip atas yang sama dengan bookmark bar
-const barSpace = () => state.bookmarkBar || findOpen ? BAR_H : 0 // GAP(10) + 24 = jarak atas halaman: bar 5px dari atas jendela & 5px dari halaman
+const barSpace = () => state.bookmarkBar || findOpen || !MAC ? BAR_H : 0 // Windows: strip atas selalu ada (tombol jendela di kanan atas) // GAP(10) + 24 = jarak atas halaman: bar 5px dari atas jendela & 5px dari halaman
 let bookmarksVersion = 0 // naik tiap bookmark berubah -> UI ambil ulang isi bookmark bar
 const nextOrder = () => bookmarks.reduce((m, b) => Math.max(m, b.order), -1) + 1
 let peeking = false   // sidebar tersembunyi sedang muncul sementara (hover tepi kiri) -> halaman diganti snapshot
@@ -366,16 +368,20 @@ const samePath = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]
 const startsWith = (path, prefix) => prefix.every((x, i) => path[i] === x)
 
 // ---- import dari browser Chromium lain di perangkat ini (Chrome, Brave, Edge, Arc, Vivaldi) ----
+// [nama, folder di ~/Library/Application Support (mac), folder di %LOCALAPPDATA% (Windows)]
 const CHROMIUM_BROWSERS = {
-  chrome: ['Google Chrome', 'Google/Chrome'], brave: ['Brave', 'BraveSoftware/Brave-Browser'], edge: ['Microsoft Edge', 'Microsoft Edge'],
-  arc: ['Arc', 'Arc/User Data'], vivaldi: ['Vivaldi', 'Vivaldi'], chromium: ['Chromium', 'Chromium'],
+  chrome: ['Google Chrome', 'Google/Chrome', 'Google/Chrome/User Data'], brave: ['Brave', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser/User Data'],
+  edge: ['Microsoft Edge', 'Microsoft Edge', 'Microsoft/Edge/User Data'], arc: ['Arc', 'Arc/User Data'],
+  vivaldi: ['Vivaldi', 'Vivaldi', 'Vivaldi/User Data'], chromium: ['Chromium', 'Chromium', 'Chromium/User Data'],
 }
-const browserDir = key => path.join(app.getPath('appData'), CHROMIUM_BROWSERS[key][1])
+const browserDir = key => MAC ? path.join(app.getPath('appData'), CHROMIUM_BROWSERS[key][1])
+  : path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), CHROMIUM_BROWSERS[key][2])
 const chromeTime = t => Math.round(Number(t) / 1000 - 11644473600000) // date_added bookmark (string mikrodetik sejak 1601) -> ms unix
 
 function importSources() {
   const out = []
-  for (const [key, [label]] of Object.entries(CHROMIUM_BROWSERS)) {
+  for (const [key, [label, , winDir]] of Object.entries(CHROMIUM_BROWSERS)) {
+    if (!MAC && !winDir) continue // Arc: tidak dicari di Windows
     let profiles
     try { profiles = JSON.parse(fs.readFileSync(path.join(browserDir(key), 'Local State'), 'utf8')).profile?.info_cache } catch { continue }
     for (const [dir, info] of Object.entries(profiles || {})) {
@@ -504,7 +510,7 @@ function flush() {
     canReopen: closedTabs.length > 0,
     allSleeping: !state.tabs.some(t => t.view),
     blockedToday: state.stats[dayKey()] || 0,
-    dl: { mode: state.dl.mode, dir: state.dl.dir && fs.existsSync(state.dl.dir) ? state.dl.dir : app.getPath('downloads'), custom: !!state.dl.dir && fs.existsSync(state.dl.dir) }, /* folder yang benar-benar dipakai */ appVersion: app.getVersion(), defaultBrowser: app.isDefaultProtocolClient('https'), canSetDefault: app.isPackaged, pet: { out: !!state.pet.out }, tabsEaten: state.tabsEaten || 0, update: updater?.get() || { status: 'idle' },
+    dl: { mode: state.dl.mode, dir: state.dl.dir && fs.existsSync(state.dl.dir) ? state.dl.dir : app.getPath('downloads'), custom: !!state.dl.dir && fs.existsSync(state.dl.dir) }, /* folder yang benar-benar dipakai */ appVersion: app.getVersion(), defaultBrowser: app.isDefaultProtocolClient('https'), canSetDefault: app.isPackaged && MAC, pet: { out: !!state.pet.out }, tabsEaten: state.tabsEaten || 0, update: updater?.get() || { status: 'idle' },
     pw: { setup: vault.exists(), unlocked: vault.unlocked(), touchId: state.pwTouchId && fs.existsSync(TOUCH_FILE), canTouchId: process.platform === 'darwin' && systemPreferences.canPromptTouchID?.() && safeStorage.isEncryptionAvailable(), lockAfter: state.pwLockAfter },
   })
   const petState = JSON.stringify({ sleeping: !state.tabs.some(t => t.view), today: state.stats[dayKey()] || 0 })
@@ -1780,7 +1786,8 @@ queries.peek = async on => {
 }
 // lembar shortcut (⌘/): dibaca langsung dari menu app -> selalu sama dengan shortcut yang benar-benar berlaku
 const KEY_SYMBOL = { CmdOrCtrl: '⌘', CommandOrControl: '⌘', Command: '⌘', Cmd: '⌘', Ctrl: '⌃', Control: '⌃', Alt: '⌥', Option: '⌥', Shift: '⇧', Plus: '+', Backspace: '⌫', Right: '→', Left: '←', Up: '↑', Down: '↓', Enter: '↩', Return: '↩', Escape: 'Esc', Tab: 'Tab', Space: 'Space' }
-const keyText = acc => acc.split('+').map(k => KEY_SYMBOL[k] ?? k.toUpperCase()).join('')
+const KEY_NAME = { CmdOrCtrl: 'Ctrl', CommandOrControl: 'Ctrl', Control: 'Ctrl', Option: 'Alt', Plus: '+', Backspace: 'Backspace', Right: '→', Left: '←', Up: '↑', Down: '↓', Return: 'Enter', Escape: 'Esc', PageDown: 'PgDn', PageUp: 'PgUp' }
+const keyText = acc => MAC ? acc.split('+').map(k => KEY_SYMBOL[k] ?? k.toUpperCase()).join('') : acc.split('+').map(k => KEY_NAME[k] ?? k).join('+')
 queries.shortcuts = () => {
   const sections = []
   const walk = (items, title) => {
@@ -2201,7 +2208,7 @@ function buildMenu() {
         { label: 'Check for Updates…', click: () => { updater.check({ manual: true }); send('open-update')() } },
         { type: 'separator' },
         { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('open-settings') },
-        { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' },
+        ...(MAC ? [{ type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }] : []), { type: 'separator' }, { role: 'quit' },
       ],
     },
     {
@@ -2212,7 +2219,7 @@ function buildMenu() {
         { label: 'New Incognito Tab', accelerator: 'CmdOrCtrl+Shift+N', click: () => commands.openPrivate() },
         { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => commands.reopenTab() },
         { label: 'Open Location…', accelerator: 'CmdOrCtrl+L', click: send('focus-url') },
-        { label: 'Quick Search', accelerator: 'Alt+Space', registerAccelerator: false, click: () => toggleSpotlight() }, // shortcut global, didaftarkan lewat globalShortcut
+        { label: 'Quick Search', accelerator: QUICK_KEY, registerAccelerator: false, click: () => toggleSpotlight() }, // shortcut global, didaftarkan lewat globalShortcut
         { type: 'separator' },
         { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => commands.closeActive() },
         { label: 'Save Page As…', accelerator: 'CmdOrCtrl+S', click: () => commands.savePage() },
@@ -2296,12 +2303,12 @@ function buildMenu() {
         { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: send('find-next') },
         { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: send('find-prev') },
         { type: 'separator' },
-        { label: 'Next Workspace', accelerator: 'Ctrl+Command+Right', click: () => commands.wsStep(1) },
-        { label: 'Previous Workspace', accelerator: 'Ctrl+Command+Left', click: () => commands.wsStep(-1) },
+        { label: 'Next Workspace', accelerator: MAC ? 'Ctrl+Command+Right' : 'Ctrl+Alt+PageDown', click: () => commands.wsStep(1) },
+        { label: 'Previous Workspace', accelerator: MAC ? 'Ctrl+Command+Left' : 'Ctrl+Alt+PageUp', click: () => commands.wsStep(-1) },
         { type: 'separator' },
         { label: 'Passwords', accelerator: 'CmdOrCtrl+Shift+P', click: send('open-passwords') },
         { label: 'Autofill Login', accelerator: 'CmdOrCtrl+Shift+L', click: () => commands.pwFillActive() },
-        { label: 'Find Password in Keychain', click: () => commands.passwords() },
+        { label: 'Find Password in Keychain', visible: MAC, click: () => commands.passwords() },
         { label: 'Radio Widget', accelerator: 'CmdOrCtrl+Shift+M', click: () => toggleMusic() },
       ],
     },
@@ -2316,7 +2323,11 @@ function buildMenu() {
   ]))
 }
 
+const overlayColors = () => ({ color: nativeTheme.shouldUseDarkColors ? '#141623' : '#7eebd3', symbolColor: nativeTheme.shouldUseDarkColors ? '#f1f2f6' : '#111111', height: GAP + BAR_H })
+nativeTheme.on('updated', () => { if (!MAC) win?.setTitleBarOverlay?.(overlayColors()) })
+
 app.whenReady().then(async () => {
+  if (!MAC) pendingOpen.push(...process.argv.slice(1).filter(a => /^https?:\/\//i.test(a)))
   load()
   applyDns()
   setInterval(watchVpn, 5000) // GlobalProtect dll. tersambung/putus -> DoH dijeda/aktif lagi
@@ -2368,8 +2379,9 @@ app.whenReady().then(async () => {
     width: 1280, height: 820, minWidth: SIDEBAR_MIN + PAGE_MIN + GAP * 2, minHeight: 400,
     title: 'Almac Browser',
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#141623' : '#7eebd3',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 13 }, // titik tengah ~19.5px = tengah header sidebar (39px)
+    // mac: tombol jendela di header sidebar. Windows: tombol jendela sistem (overlay) di strip atas kanan, setinggi strip itu
+    ...(MAC ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 13 } } // titik tengah ~19.5px = tengah header sidebar (39px)
+      : { titleBarStyle: 'hidden', titleBarOverlay: overlayColors() }),
     icon: path.join(__dirname, 'build', 'icon.png'), // Windows/Linux
     webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: false, contextIsolation: true },
   })
@@ -2395,7 +2407,7 @@ app.whenReady().then(async () => {
   commands.switchProfile(state.activeProfile)
   uiReady = true
   pendingOpen.splice(0).forEach(openFromOutside) // link yang membuka Almac
-  if (!globalShortcut.register('Alt+Space', toggleSpotlight)) toast('⌥Space is taken by another app, so Quick Search is in the File menu only')
+  if (!globalShortcut.register(QUICK_KEY, toggleSpotlight)) toast(keyText(QUICK_KEY) + ' is taken by another app, so Quick Search is in the File menu only')
   if (state.music?.on) toggleMusic()
   if (state.pet.out) petOut(true)
 

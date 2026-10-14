@@ -114,6 +114,7 @@
       if (e.key === 'Escape') spot.close()
     })
     spot.onOpen(() => { q.value = ''; items = []; draw(); q.focus() })
+    if (spot.platform !== 'darwin') $('.sp-foot span').textContent = 'ALMAC ALT+SHIFT+SPACE'
     draw()
   </script>
 </body>

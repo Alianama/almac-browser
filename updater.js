@@ -23,6 +23,8 @@ const newer = (a, b) => {
   for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0)
   return false
 }
+// kunci file di manifest: mac = arch saja (format lama, dipakai versi yang sudah terpasang), lainnya = "win32-x64" dst.
+const fileKey = (platform = process.platform, arch = process.arch) => platform === 'darwin' ? arch : `${platform}-${arch}`
 const verifyManifest = (json, sigB64) => crypto.verify(null, Buffer.from(json), PUBLIC_KEY, Buffer.from(sigB64.trim(), 'base64'))
 
 function createUpdater({ app, onChange }) {
@@ -33,7 +35,8 @@ function createUpdater({ app, onChange }) {
   const bundle = () => path.resolve(process.execPath, '../../..')
   function cannotUpdate() {
     if (!app.isPackaged) return 'Development build: updates are installed with git pull.'
-    if (process.platform !== 'darwin') return 'In-app updates are macOS only.'
+    if (process.platform === 'win32') return ''
+    if (process.platform !== 'darwin') return 'In-app updates are available on macOS and Windows only.'
     if (/AppTranslocation|^\/Volumes\//.test(bundle())) return 'Move Almac Browser to the Applications folder first, then reopen it.'
     try { fs.accessSync(path.dirname(bundle()), fs.constants.W_OK) } catch { return `No permission to replace the app in ${path.dirname(bundle())}.` }
     return ''
@@ -50,7 +53,7 @@ function createUpdater({ app, onChange }) {
       if (!verifyManifest(json, sig)) throw new Error('Update signature is invalid. The update was refused.')
       const m = JSON.parse(json)
       if (!newer(m.version, app.getVersion())) return set({ status: manual ? 'latest' : 'idle' })
-      if (!m.files?.[process.arch]) throw new Error(`No ${process.arch} build in this release.`)
+      if (!m.files?.[fileKey()]) throw new Error(`No ${fileKey()} build in this release.`)
       manifest = m
       let notes = ''
       if (!FEED) try { notes = (await (await fetch(`https://api.github.com/repos/${REPO}/releases/tags/v${m.version}`, { signal: AbortSignal.timeout(10000) })).json()).body || '' } catch {}
@@ -62,9 +65,10 @@ function createUpdater({ app, onChange }) {
 
   async function download() {
     if (s.status !== 'available' || !manifest) return
-    const f = manifest.files[process.arch]
+    const f = manifest.files[fileKey()]
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'almac-update-'))
-    const zip = path.join(dir, 'update.zip')
+    const win = process.platform === 'win32'
+    const zip = path.join(dir, win ? 'AlmacSetup.exe' : 'update.zip') // Windows: installer NSIS
     try {
       set({ status: 'downloading', progress: 0 })
       const r = await fetch(fileUrl(manifest.version, f.name))
@@ -78,6 +82,7 @@ function createUpdater({ app, onChange }) {
       }
       await new Promise((res, rej) => out.end(err => err ? rej(err) : res()))
       if (got !== f.size || hash.digest('base64') !== f.sha512) throw new Error('Downloaded file does not match the signed checksum. The update was refused.')
+      if (win) { staged = { dir, exe: zip }; return set({ status: 'ready', progress: 1 }) }
       // ditto: ekstrak bundel macOS apa adanya (symlink framework, izin eksekusi, tanda tangan)
       await new Promise((res, rej) => execFile('/usr/bin/ditto', ['-x', '-k', zip, dir], e => e ? rej(e) : res()))
       const appDir = fs.readdirSync(dir).find(n => n.endsWith('.app'))
@@ -94,6 +99,8 @@ function createUpdater({ app, onChange }) {
   // path dikirim sebagai argumen ($1..$4), bukan disisipkan ke teks skrip.
   function install() {
     if (s.status !== 'ready' || !staged) return
+    // Windows: installer berjalan diam-diam (/S), menutup app lama, memasang, lalu membuka Almac lagi (--force-run)
+    if (staged.exe) { spawn(staged.exe, ['/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref(); return app.quit() }
     const target = bundle(), backup = target + '.old'
     const script = `
       while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
@@ -108,4 +115,4 @@ function createUpdater({ app, onChange }) {
   return { check, download, install, get: () => ({ ...s }) }
 }
 
-module.exports = { createUpdater, newer, verifyManifest }
+module.exports = { createUpdater, newer, verifyManifest, fileKey }

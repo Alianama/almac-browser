@@ -4,9 +4,9 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.3.5-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.3.6-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
-    <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform">
+    <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
     <img src="https://img.shields.io/badge/Chrome-Extensions-yellow?style=flat-square&logo=googlechrome" alt="Chrome Extensions">
   </p>
@@ -109,20 +109,27 @@ Tabbed settings panel similar to Chrome:
 
 ### Prerequisites
 - **Node.js** 18+
-- **macOS** (primary target; Linux/Windows partially supported)
+- **macOS** or **Windows 10/11** (x64). Linux is not packaged yet.
 
 ### Download
-Grab the `.dmg` from [Releases](https://github.com/Alianama/almac-browser/releases) (`arm64` = Apple Silicon, the other = Intel).
-The app is not notarized, so on first launch right-click the app → **Open**, or run:
+Get it from [Releases](https://github.com/Alianama/almac-browser/releases).
+
+**macOS:** download the `.dmg` (`arm64` = Apple Silicon, `x64` = Intel). Apple has not notarized the app, so the first launch is blocked. Run this once:
 `xattr -dr com.apple.quarantine "/Applications/Almac Browser.app"`
+Or open **System Settings › Privacy & Security** and click **Open Anyway**.
+
+**Windows:** download `Almac-Browser-<version>-win-x64.exe` and run it. Almac installs for your user account, with no admin rights needed. The installer is not code-signed, so SmartScreen shows "Windows protected your PC". Click **More info › Run anyway**.
+
+On Windows, shortcuts use **Ctrl** where the Mac uses **⌘**. Quick Search is **Alt+Shift+Space**, because Windows uses Alt+Space for the window menu. Switch workspaces with **Ctrl+Alt+PgUp/PgDn**. Almac can't be set as the default browser on Windows yet.
 
 ### Updates
-From v1.3.0, Almac updates itself: it checks GitHub Releases on launch and every 6 hours, or use **Almac Browser › Check for Updates…**.
+Almac updates itself on macOS (from v1.3.0) and Windows. It checks GitHub Releases on launch and every 6 hours, or use **Check for Updates…**. On Windows, the signed installer runs silently and reopens Almac.
 Every release ships a manifest signed with the maintainer's Ed25519 key. The app installs a download only when the signature and the SHA-512 checksum both match, so a compromised GitHub account cannot push a fake update.
 
 ### Build & release
-- `npm run dist` → unsigned-feed build in `dist/`
-- `npm run release -- notes.md` → build, sign the update manifest with `~/.almac/update-key.pem`, and publish the GitHub release
+- `npm run dist` → macOS build in `dist/`
+- `npm run dist:win` → Windows installer in `dist/`, built on macOS without Wine
+- `npm run release -- notes.md` → build macOS and Windows, sign the update manifest with `~/.almac/update-key.pem`, and publish the GitHub release
 
 ### Run from Source
 

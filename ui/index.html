@@ -126,6 +126,26 @@ const $ = s => document.querySelector(s)
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e }
 const iconEl = name => wsIcon(ICON_MAP[name] || name)
 
+// Windows/Linux: teks shortcut di UI ditulis gaya Mac (⌘⇧T) -> tampil sebagai Ctrl+Shift+T
+const MAC = almac.platform === 'darwin'
+document.body.classList.add(MAC ? 'mac' : 'win')
+if (!MAC) {
+  const KEY = { '⌘': 'Ctrl', '⌃': 'Ctrl', '⌥': 'Alt', '⇧': 'Shift' }
+  const fix = s => s.replace(/([⌘⌃⌥⇧]+)(.?)/g, (_, k, next) => [...new Set([...k].map(c => KEY[c]))].join('+') + (/^[\s-]?$/.test(next) ? '' : '+') + next)
+    .replace(/↩/g, 'Enter').replace(/⌫/g, 'Backspace')
+  const SYM = /[⌘⌃⌥⇧↩⌫]/
+  const fixNode = n => {
+    if (n.nodeType === 3) { if (SYM.test(n.nodeValue)) n.nodeValue = fix(n.nodeValue); return }
+    if (n.nodeType !== 1) return
+    for (const a of ['title', 'placeholder']) { const v = n.getAttribute(a); if (v && SYM.test(v)) n.setAttribute(a, fix(v)) }
+    for (const c of n.childNodes) fixNode(c)
+  }
+  // ponytail: semua teks baru dipindai lewat MutationObserver (satu tempat, bukan di tiap string); ganti ke helper per string kalau terasa berat
+  new MutationObserver(ms => { for (const m of ms) m.type === 'childList' ? m.addedNodes.forEach(fixNode) : fixNode(m.target) })
+    .observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['title', 'placeholder'] })
+  fixNode(document.body)
+}
+
 document.querySelectorAll('[data-icon]').forEach(e => e.replaceChildren(iconEl(e.dataset.icon)))
 document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => almac.cmd(b.dataset.cmd)))
 
@@ -1743,7 +1763,7 @@ const PALETTE_CMDS = [
   ['Passwords', 'key', () => setTimeout(openPasswords, 80), '⌘⇧P'],
   ['Lock passwords', 'lock', () => almac.cmd('pwLock')],
   ['Check for updates', 'retry', () => { almac.cmd('updateCheck'); setTimeout(openUpdate, 80) }],
-  ['Find password in Keychain', 'external', () => almac.cmd('passwords')],
+  ...(MAC ? [['Find password in Keychain', 'external', () => almac.cmd('passwords')]] : []),
   ['Import from Chrome/Brave', 'download', () => setTimeout(openImport, 80)],
   ['Chrome Web Store', 'ext', () => almac.cmd('webStore')],
 ]

@@ -760,3 +760,8 @@ textarea.field.code { height: 120px; padding: 8px 10px; resize: vertical; font: 
 .keys { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; flex: none; max-width: 60%; }
 .keys kbd { min-width: 24px; text-align: center; font: 600 11px/1 var(--font-ui); padding: 4px 6px; border: var(--bw) solid var(--border); border-radius: 5px; background: var(--glass-strong); box-shadow: 1px 1px 0 var(--shadow); white-space: nowrap; }
 .keys-cols > .none { column-span: all; }
+
+/* ---------- Windows / Linux ---------- */
+body.win .top { padding-left: 0; } /* tidak ada tombol jendela macOS di header sidebar */
+body.win #bmbar, body.win #findbar { right: calc(var(--gap) + 140px); } /* tombol jendela Windows (overlay) di kanan atas */
+body.win.no-bar { --bar-space: var(--bar-h); } /* strip atas tetap ada (sama dengan barSpace() di main.js) */

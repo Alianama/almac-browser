@@ -1,6 +1,6 @@
 // node updater.test.js -- perbandingan versi & verifikasi tanda tangan manifest
 const assert = require('assert'), crypto = require('crypto')
-const { newer, verifyManifest } = require('./updater')
+const { newer, verifyManifest, fileKey } = require('./updater')
 assert(newer('1.10.0', '1.9.9') && newer('1.2.1', '1.2.0') && newer('2.0', '1.99.99'))
 assert(!newer('1.2.0', '1.2.0') && !newer('1.1.9', '1.2.0'))
 const json = JSON.stringify({ version: '9.9.9', files: {} })
@@ -14,4 +14,6 @@ if (fs.existsSync(own)) { // kunci pemilik: harus diterima, dan manifest yang di
   assert(verifyManifest(json, sig))
   assert(!verifyManifest(json.replace('9.9.9', '9.9.8'), sig), 'tampered manifest accepted')
 }
+// kunci manifest: mac tetap 'arm64'/'x64' (dibaca versi lama), Windows 'win32-x64'
+assert(fileKey('darwin', 'arm64') === 'arm64' && fileKey('win32', 'x64') === 'win32-x64')
 console.log('updater: ok')

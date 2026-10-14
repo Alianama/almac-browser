@@ -1,13 +1,15 @@
 // npm run release -- <file catatan rilis.md>
-// build mac (arm64 + x64), buat almac-update.json (versi + SHA-512 tiap zip) dan tanda tangan Ed25519-nya,
-// lalu buat GitHub Release. Kunci pribadi: $ALMAC_UPDATE_KEY atau ~/.almac/update-key.pem (JANGAN di-commit, simpan cadangannya:
+// build mac (arm64 + x64) + installer Windows (NSIS x64; electron-builder bisa membuatnya dari macOS tanpa Wine),
+// buat almac-update.json (versi + SHA-512 tiap file) dan tanda tangan Ed25519-nya, lalu buat GitHub Release.
+// Kunci pribadi: $ALMAC_UPDATE_KEY atau ~/.almac/update-key.pem (JANGAN di-commit, simpan cadangannya:
 // tanpa kunci ini app yang sudah terpasang tidak akan menerima update lagi).
 const { execFileSync } = require('child_process')
 const crypto = require('crypto')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { verifyManifest } = require('../updater')
+const { verifyManifest, fileKey } = require('../updater')
+const REPO = 'Alianama/almac-browser'
 
 const root = path.join(__dirname, '..'), dist = path.join(root, 'dist')
 const { version } = require('../package.json')
@@ -24,18 +26,21 @@ const identity = /"Apple Development: ([^"]+)"/.exec(execFileSync('security', ['
 console.log(identity ? 'signing as Apple Development: ' + identity : 'no Apple Development certificate: ad-hoc signing')
 run('npx', ['electron-builder', '--mac', '--publish', 'never', ...(identity ? ['-c.mac.identity=' + identity] : [])])
 
+run('npx', ['electron-builder', '--win', '--x64', '--publish', 'never'])
+
 const files = {}
-for (const arch of ['arm64', 'x64']) {
-  const name = `Almac-Browser-${version}-${arch}.zip`
+const add = (key, name) => {
   const buf = fs.readFileSync(path.join(dist, name))
-  files[arch] = { name, size: buf.length, sha512: crypto.createHash('sha512').update(buf).digest('base64') }
+  files[key] = { name, size: buf.length, sha512: crypto.createHash('sha512').update(buf).digest('base64') }
 }
+for (const arch of ['arm64', 'x64']) add(fileKey('darwin', arch), `Almac-Browser-${version}-${arch}.zip`)
+add(fileKey('win32', 'x64'), `Almac-Browser-${version}-win-x64.exe`)
 const json = JSON.stringify({ version, files }, null, 2)
 const sig = crypto.sign(null, Buffer.from(json), key).toString('base64')
 if (!verifyManifest(json, sig)) { console.error('signature does not match the public key in updater.js'); process.exit(1) }
 fs.writeFileSync(path.join(dist, 'almac-update.json'), json)
 fs.writeFileSync(path.join(dist, 'almac-update.json.sig'), sig)
 
-const assets = fs.readdirSync(dist).filter(f => /\.(dmg|zip)$/.test(f) || f.startsWith('almac-update.json')).map(f => path.join(dist, f))
+const assets = fs.readdirSync(dist).filter(f => /\.(dmg|zip|exe)$/.test(f) || f.startsWith('almac-update.json')).map(f => path.join(dist, f))
 run('git', ['push', 'origin', 'HEAD'])
-run('gh', ['release', 'create', 'v' + version, '-R', 'Alianama/almac-browser', '--target', 'main', '--title', 'Almac Browser v' + version, '--notes-file', notes, ...assets])
+run('gh', ['release', 'create', 'v' + version, '-R', REPO, '--target', 'main', '--title', 'Almac Browser v' + version, '--notes-file', notes, ...assets])
