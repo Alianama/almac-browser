@@ -16,6 +16,8 @@ const BRANDS = {
   salesforce: 'salesforce.com', tokopedia: 'tokopedia.com', shopee: 'shopee.co.id', bukalapak: 'bukalapak.com',
   klikbca: 'klikbca.com', bca: 'bca.co.id', bankmandiri: 'bankmandiri.co.id', gojek: 'gojek.com',
 }
+// domain resmi milik merek di atas yang kebetulan mirip namanya (bukan tiruan)
+const OFFICIAL = new Set(['tiktokv.com'])
 // huruf/angka yang sering dipakai menyamar sebagai huruf Latin (Unicode confusables, versi ringkas)
 const CONFUSABLE = {
   0: 'o', 1: 'l', i: 'l', '|': 'l', 3: 'e', 5: 's',
@@ -42,7 +44,7 @@ function distance(a, b) {
 function lookalike(host) {
   if (!host || !host.includes('.') || /^[\d.]+$|:/.test(host)) return null
   const domain = getDomain(host), label = getDomainWithoutSuffix(host)
-  if (!domain || !label) return null
+  if (!domain || !label || OFFICIAL.has(domain)) return null
   const shown = domainToUnicode(host) || host, uLabel = domainToUnicode(label) || label, sub = host.slice(0, -domain.length - 1)
   const sk = skeleton(uLabel)
   for (const [brand, official] of Object.entries(BRANDS)) {

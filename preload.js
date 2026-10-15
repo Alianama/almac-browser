@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('almac', {
   onGlance: fn => ipcRenderer.on('glance', (_, g) => fn(g)),
   onOpenBoost: fn => ipcRenderer.on('open-boost', fn),
   onChromePage: fn => ipcRenderer.on('chrome-page', (_, page) => fn(page)),
+  onWhatsNew: fn => ipcRenderer.on('whats-new', (_, r) => fn(r)),
   onAuthRequest: fn => ipcRenderer.on('auth-request', (_, r) => fn(r)),
   onOpenRequestLog: fn => ipcRenderer.on('open-request-log', fn),
   onOpenSiteInfo: fn => ipcRenderer.on('open-site-info', fn),

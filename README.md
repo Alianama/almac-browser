@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.3.7-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.3.8-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
@@ -52,6 +52,8 @@
 - **Request log (⌘⌥L)** — every domain the page contacted, request count, blocked count, first/third party, IP; copy as CSV
 - **Remembered self-signed certificates** — routers, firewalls, iLO/iDRAC, Proxmox, NAS: trust once, pinned to the fingerprint (asks again if it changes)
 - **Device notes** — IP, VLAN, PIC and notes per host, encrypted in the password vault
+- **Quick tools in ⌘K** — `jwt`, `b64`, `url`, `hash`, `dns`, `whois`, `ip` (paste a JWT to decode it straight away); tool input is never sent to search suggestions
+- **JSON viewer** — API responses show as a collapsible tree with Pretty / Raw views and Copy; XML uses the built-in collapsible tree
 ### 🔑 Almac Passwords
 - Built-in password manager: **AES-256-GCM** vault, key derived from your master password (PBKDF2-SHA256, 600k iterations). Same scheme as Almac Remote
 - Bitwarden-style autofill: cat icon in login fields, dropdown on focus, email-first sign-ins, **⌘⇧L** to fill; strong password generator

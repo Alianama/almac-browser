@@ -40,7 +40,7 @@
     </section>
 
     <section class="tabs-card glass" id="tabsPanel">
-      <div class="label"><span id="wsName" class="ws-name" title="Double-click to edit workspace. Swipe with 2/3 fingers here to switch"></span><span class="ws-tools"><span id="count"></span><button class="mini" id="wsEditBtn" type="button" title="Edit workspace" data-icon="edit"></button></span></div>
+      <div class="label"><button type="button" id="profBadge" class="prof-badge pixel"></button><span id="wsName" class="ws-name" title="Double-click to edit workspace. Swipe with 2/3 fingers here to switch"></span><span class="ws-tools"><span id="count"></span><button class="mini" id="wsEditBtn" type="button" title="Edit workspace" data-icon="edit"></button></span></div>
       <div id="tabs"></div>
       <div class="ws-bar"><div id="wsDots"></div><button class="mini" id="wsAddBtn" type="button" title="New workspace" data-icon="plus"></button></div>
     </section>
@@ -1277,6 +1277,12 @@ almac.onState(s => {
   const isPrivate = !!s.profiles.find(p => p.id === s.activeProfile)?.ephemeral
   document.body.classList.toggle('private', isPrivate)
   $('#privBadge').hidden = !isPrivate
+  // profil aktif selalu terlihat di header (privat sudah punya badge PRIVATE sendiri)
+  const pb = $('#profBadge')
+  pb.hidden = isPrivate
+  if (pb.textContent !== profile.name) pb.textContent = profile.name
+  pb.style.setProperty('--c', profile.color)
+  pb.title = `Profile: ${profile.name} — click to switch`
   $('#privNote').hidden = !isPrivate
   $('#starBtn').hidden = isPrivate
   $('#zoomBtn').hidden = s.zoom === 100
@@ -1464,6 +1470,7 @@ function renderTabs(tabs, groups = {}) {
       ? el('img', { src: t.favicon, onerror() { this.replaceWith(el('i')) } })
       : el('i'))
     const x = el('button', { className: 'x', title: 'Close (⌘W)', onclick: e => { e.stopPropagation(); almac.cmd('close', t.id) } }, iconEl('x'))
+    const cap = t.capturing ? [el('em', { className: 'cap', title: 'Using your camera or microphone (meeting): kept awake' }, iconEl('mic'))] : []
     const audio = t.audible || t.muted ? [el('button', { className: 'audio' + (t.muted ? ' muted' : ''), title: t.muted ? 'Unmute tab' : 'Mute tab', onclick: e => { e.stopPropagation(); almac.cmd('muteTab', t.id) } }, iconEl(t.muted ? 'volume-x' : 'volume-2'))] : []
     const otherGroups = Object.entries(groups).filter(([gid]) => gid !== t.tg && tabs.some(x => x.tg === gid))
     const cont = t.container
@@ -1502,7 +1509,7 @@ function renderTabs(tabs, groups = {}) {
         ])
       },
     }, fav, el('span', { textContent: t.title }), ...(cont ? [el('em', { className: 'cont-tag', textContent: cont.name })] : []),
-      ...(t.code ? [el('b', { className: 'code ' + codeClass(+t.code.split('›').at(-1)), textContent: t.code, title: t.codeTitle })] : []), ...countBadge(t), ...audio, ...(t.split ? [el('span', { className: 'split-mark', title: 'Split view' }, iconEl('split'))] : []), ...(t.sleeping ? [el('em', { className: 'zz', textContent: 'zz' })] : []), x)
+      ...(t.code ? [el('b', { className: 'code ' + codeClass(+t.code), textContent: t.code, title: t.codeTitle })] : []), ...countBadge(t), ...cap, ...audio, ...(t.split ? [el('span', { className: 'split-mark', title: 'Split view' }, iconEl('split'))] : []), ...(t.sleeping ? [el('em', { className: 'zz', textContent: 'zz' })] : []), x)
   }
 }
 
@@ -1940,17 +1947,82 @@ const PALETTE_CMDS = [
   ['Passwords', 'key', () => setTimeout(openPasswords, 80), '⌘⇧P'],
   ['Lock passwords', 'lock', () => almac.cmd('pwLock')],
   ['Check for updates', 'retry', () => { almac.cmd('updateCheck'); setTimeout(openUpdate, 80) }],
+  ["What's new", 'sparkles', () => setTimeout(() => almac.cmd('whatsNew'), 80)],
   ...(MAC ? [['Find password in Keychain', 'external', () => almac.cmd('passwords')]] : []),
   ['Import from Chrome/Brave', 'download', () => setTimeout(openImport, 80)],
   ['Chrome Web Store', 'ext', () => almac.cmd('webStore')],
 ]
+// ---- tools cepat (⌘K): ketik awalan ("dns example.com"), atau paste token JWT langsung ----
+const TOOLS = [
+  ['jwt', 'Decode JWT', 'key', 'jwt eyJhbGci…'],
+  ['b64', 'Base64 encode / decode', 'code', 'b64 text'],
+  ['url', 'URL encode / decode', 'link', 'url text'],
+  ['hash', 'Hash: MD5, SHA-1, SHA-256, SHA-512', 'hash', 'hash text'],
+  ['dns', 'DNS lookup', 'network', 'dns example.com'],
+  ['whois', 'WHOIS lookup', 'search', 'whois example.com'],
+  ['ip', 'My public IP', 'globe', 'ip'],
+]
+const TOOL_RE = /^(jwt|b64|base64|url|hash|dns|whois|ip)(?:\s+([\s\S]*)|$)/i
+const JWT_RE = /^eyJ[\w-]*\.[\w-]+\.[\w-]*$/
+// base64 & base64url -> teks UTF-8 (gagal kalau hasilnya bukan teks)
+const b64dec = s => {
+  s = s.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/')
+  return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(s + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0)))
+}
+const b64enc = s => { let bin = ''; for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b); return btoa(bin) }
+const relTime = ms => {
+  const d = ms - Date.now(), a = Math.abs(d), [unit, name] = a < 3.6e6 ? [6e4, 'min'] : a < 864e5 ? [3.6e6, 'h'] : [864e5, 'days']
+  const n = Math.round(a / unit)
+  return d < 0 ? `${n} ${name} ago` : `in ${n} ${name}`
+}
+// JWT: header & payload saja; tanda tangan TIDAK diverifikasi (butuh kunci server)
+function decodeJwt(token) {
+  const [h, p] = token.split('.')
+  const header = JSON.parse(b64dec(h)), payload = JSON.parse(b64dec(p))
+  const times = ['exp', 'iat', 'nbf'].filter(k => typeof payload[k] === 'number')
+    .map(k => `${k.padEnd(4)} ${new Date(payload[k] * 1000).toLocaleString('en-GB')} (${relTime(payload[k] * 1000)})`)
+  const expired = typeof payload.exp === 'number' && payload.exp * 1000 < Date.now()
+  return {
+    summary: [header.alg, payload.sub && 'sub ' + payload.sub, typeof payload.exp === 'number' && (expired ? 'EXPIRED' : 'expires ' + relTime(payload.exp * 1000))].filter(Boolean).join(' · '),
+    text: `HEADER\n${JSON.stringify(header, null, 2)}\n\nPAYLOAD\n${JSON.stringify(payload, null, 2)}\n\n${times.join('\n')}${expired ? '\n\n⚠ Token has EXPIRED' : ''}\n\nSignature: not verified (needs the server key)`,
+  }
+}
+const copyText = (text, msg) => { navigator.clipboard.writeText(text); toast(msg, 'copy') }
+function toolResult(title, text) {
+  openModal(title, el('pre', { className: 'tool-out', textContent: text }), [
+    { label: 'Copy', onClick: () => { copyText(text, 'Copied'); return false } }, { label: 'Done', primary: true }])
+}
+async function runTool(kind, arg, title) {
+  toast(title + '…', 'search')
+  const r = await askErr('tool', { kind, arg })
+  toolResult(title + (arg ? ' · ' + arg : ''), r?.error ? 'Failed: ' + r.error : r)
+}
+// hasil tool untuk teks di palette; [] = bukan tool
+async function toolItems(q) {
+  const m = TOOL_RE.exec(q)
+  const name = m ? m[1].toLowerCase().replace('base64', 'b64') : JWT_RE.test(q) ? 'jwt' : null
+  if (!name) return []
+  const arg = m ? (m[2] || '').trim() : q
+  const [, label, icon] = TOOLS.find(t => t[0] === name)
+  if (!arg && name !== 'ip') return [{ icon, text: label, sub: `type after "${name} "`, keep: true, run() {} }]
+  const copyItem = (what, v) => ({ icon, text: v.length > 90 ? v.slice(0, 90) + '…' : v, sub: what + ' · ↩ copy', run: () => copyText(v, what + ' copied') })
+  if (name === 'jwt') {
+    try { const r = decodeJwt(arg); return [{ icon, text: 'Decode JWT', sub: r.summary, run: () => setTimeout(() => toolResult('JWT', r.text), 80) }] }
+    catch { return [{ icon, text: 'Not a valid JWT', keep: true, run() {} }] }
+  }
+  if (name === 'b64') { const out = []; try { out.push(copyItem('Base64 decoded', b64dec(arg))) } catch {} return [...out, copyItem('Base64 encoded', b64enc(arg))] }
+  if (name === 'url') { const out = []; try { const d = decodeURIComponent(arg.replace(/\+/g, ' ')); if (d !== arg) out.push(copyItem('URL decoded', d)) } catch {} return [...out, copyItem('URL encoded', encodeURIComponent(arg))] }
+  if (name === 'hash') return Object.entries(await almac.ask('tool', { kind: 'hash', arg })).map(([k, v]) => copyItem(k.toUpperCase(), v))
+  return [{ icon, text: label + (arg ? ': ' + arg : ''), sub: '↩ run', run: () => setTimeout(() => runTool(name, arg, label), 80) }]
+}
+
 async function openPalette() {
   if (modalOpen) closeModal()
   const tabs = await almac.ask('allTabs')
   const input = el('input', { className: 'field', placeholder: 'Search tabs, bookmarks, history, commands…', autocomplete: 'off', spellcheck: false })
   const list = el('div', { className: 'palette-list' })
   let items = [], idx = 0, seq = 0
-  const run = it => { closeModal(); it.run() }
+  const run = it => { if (it.keep) return it.run(); closeModal(); it.run() }
   const draw = () => {
     list.replaceChildren(...items.map((it, i) => el('div', { className: 'sug' + (i === idx ? ' sel' : ''), onmousedown: e => { e.preventDefault(); run(it) } },
       iconEl(it.icon), el('span', { textContent: it.text }), it.sub ? el('small', { textContent: it.sub }) : '')))
@@ -1959,7 +2031,17 @@ async function openPalette() {
   const update = async () => {
     const q = input.value.trim(), lq = q.toLowerCase(), my = ++seq
     const has = t => t.toLowerCase().includes(lq)
-    const cmds = PALETTE_CMDS.filter(([t]) => !lq || has(t)).map(([text, icon, fn, key]) => ({ icon, text, sub: key, run: fn }))
+    const toolCmds = TOOLS.map(([name, text, icon, hint]) => ({ icon, text: 'Tool: ' + text, sub: hint, keep: true, run: () => { input.value = name + ' '; input.focus(); update() } }))
+    const cmds = [...PALETTE_CMDS.map(([text, icon, fn, key]) => ({ icon, text, sub: key, run: fn })), ...toolCmds].filter(c => !lq || has(c.text))
+    // tool: hasil langsung di atas. Teksnya (token, secret) tidak dikirim ke saran mesin pencari.
+    const tools = q ? await toolItems(q).catch(() => []) : []
+    if (my !== seq) return
+    // awalan tool juga kata biasa ("url shortener"): pencarian tetap bisa dipilih (panah bawah), tanpa saran otomatis.
+    // JWT yang di-paste tidak ditawarkan untuk dicari (token jangan sampai terkirim ke mesin pencari).
+    if (tools.length) {
+      items = TOOL_RE.test(q) ? [...tools, { icon: 'search', text: q, sub: 'Search ' + lastState.engineName, run: () => almac.cmd('navigate', q) }] : tools
+      idx = 0; return draw()
+    }
     const tabItems = tabs.filter(t => !lq || has(t.title + ' ' + (t.url || ''))).slice(0, 8).map(t => ({ icon: 'layout-grid', text: t.title, sub: 'Tab · ' + t.ws, run: () => almac.cmd('select', t.id) }))
     items = q ? [...tabItems, ...cmds.slice(0, 5)] : [...tabItems.slice(0, 5), ...cmds]
     if (q) {
@@ -1991,6 +2073,13 @@ function renderPet(s) {
   $('#focusBadge').title = 'Focus mode — click to manage'
 }
 $('#focusBadge').addEventListener('click', () => openSettings('focus'))
+$('#profBadge').addEventListener('click', e => {
+  const r = e.currentTarget.getBoundingClientRect()
+  ctxMenu(r.left, r.bottom + 4, [
+    ...lastState.profiles.map(p => ({ icon: p.id === lastState.activeProfile ? 'check' : p.ephemeral ? 'private' : 'user', label: p.name, onClick: () => almac.cmd('switchProfile', p.id) })),
+    '-', { icon: 'edit', label: 'Edit this profile…', onClick: () => editProfile(lastState.profiles.find(p => p.id === lastState.activeProfile)) },
+  ])
+})
 
 // ---- statistik mingguan ----
 async function openStats() {
@@ -2227,6 +2316,44 @@ function renderLoadError(e) {
   almiImg.complete ? draw() : almiImg.addEventListener('load', draw, { once: true })
 }
 
+// ---- catatan rilis: markdown sederhana (judul, poin, **tebal**, `kode`, blok kode) -> DOM lewat textContent (aman) ----
+function mdBlocks(md) {
+  const out = []
+  let list = null, code = null
+  const inline = text => {
+    const parts = [], re = /(\*\*[^*]+\*\*|`[^`]+`)/g
+    let i = 0, m
+    while ((m = re.exec(text))) {
+      if (m.index > i) parts.push(text.slice(i, m.index))
+      parts.push(m[0][0] === '*' ? el('b', { textContent: m[0].slice(2, -2) }) : el('code', { textContent: m[0].slice(1, -1) }))
+      i = re.lastIndex
+    }
+    parts.push(text.slice(i))
+    return parts
+  }
+  for (const line of md.replace(/\r/g, '').split('\n')) {
+    if (code) { if (line.startsWith('```')) { out.push(el('pre', { textContent: code.join('\n') })); code = null } else code.push(line); continue }
+    if (line.startsWith('```')) { code = []; list = null; continue }
+    const h = /^#{1,4}\s+(.*)/.exec(line), li = /^\s*[-*]\s+(.*)/.exec(line)
+    if (h) { list = null; out.push(el('h3', {}, ...inline(h[1]))) }
+    else if (li) { if (!list) out.push(list = el('ul')); list.append(el('li', {}, ...inline(li[1]))) }
+    else if (line.trim()) { list = null; out.push(el('p', {}, ...inline(line))) }
+    else list = null
+  }
+  return out
+}
+// catatan dari GitHub: buang bagian cara install/update & baris tanda tangan, sama dengan "What's new"
+const releaseNotes = md => mdBlocks(md.split(/^##\s+(?:Install|Update)\b/m)[0].replace(/^.*Generated with \[Claude Code\].*$/m, '').trim())
+
+// ---- "What's new": muncul sekali setelah update (main), bisa dibuka lagi dari menu / ⌘K ----
+almac.onWhatsNew(async ({ version, notes }) => {
+  await openModal(`What's new in v${version}`, [
+    el('div', { className: 'stats-hero' }, almiCanvas('happy', 64, 4), el('p', { className: 'modal-text', textContent: `Almac Browser was updated to v${version}. Here is what changed.` })),
+    el('div', { className: 'whats-new' }, ...(notes ? mdBlocks(notes) : [el('p', { className: 'modal-text', textContent: 'No release notes in this build.' })])),
+  ], [{ label: 'Got it', primary: true }])
+  requestAnimationFrame(() => { const w = $('#overlay .whats-new'); if (w) w.scrollTop = 0 })
+})
+
 // ---- update dari dalam app (updater.js): manifest bertanda tangan Ed25519 + SHA-512 ----
 let updateShown = false, notifiedVersion = ''
 const UPD_TEXT = {
@@ -2236,7 +2363,7 @@ const UPD_TEXT = {
 function updateBody(u) {
   if (u.status === 'available') return [
     el('p', { className: 'modal-text' }, 'Almac Browser ', el('b', { textContent: 'v' + u.version }), ` is available (you have v${lastState.appVersion}). Your tabs, passwords, and settings are kept.`),
-    ...(u.notes ? [el('pre', { className: 'upd-notes', textContent: u.notes })] : []),
+    ...(u.notes ? [el('div', { className: 'whats-new upd-notes' }, ...releaseNotes(u.notes))] : []),
   ]
   if (u.status === 'error') return [el('p', { className: 'modal-text error', textContent: u.error })]
   return [

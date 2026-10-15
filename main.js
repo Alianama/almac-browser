@@ -9,6 +9,7 @@ const { ElectronBlocker } = require('@ghostery/adblocker-electron')
 const { getDomain } = require('tldts-experimental')
 const passwords = require('./passwords')
 const { lookalike } = require('./lookalike')
+const { jsonView, JSON_VIEW_CSS } = require('./viewer')
 const { createUpdater } = require('./updater')
 
 app.setName('Almac Browser')
@@ -38,6 +39,7 @@ app.on('second-instance', (_, argv) => {
 })
 const DATA = app.getPath('userData')
 const STATE_FILE = path.join(DATA, 'state.json')
+const FRESH_INSTALL = !fs.existsSync(STATE_FILE) // install baru: tidak perlu "What's new"
 const HISTORY_FILE = path.join(DATA, 'history.json')
 const HISTORY_MAX = 20000
 const BOOKMARKS_FILE = path.join(DATA, 'bookmarks.json')
@@ -78,7 +80,7 @@ process.on('uncaughtException', e => {
 })
 
 let win, blocker, updater
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, seenVersion: '', focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -491,7 +493,7 @@ function flush() {
     tabs: state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === activeWs()).sort((a, b) => !!b.pinned - !!a.pinned).map(t => ({
       id: t.id, title: t.title || t.url || 'New tab', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
       pinned: !!t.pinned, atPin: !t.pinned || t.url === t.pinUrl,
-      count: tabCount(t), audible: !!t.view?.webContents.isCurrentlyAudible(), muted: !!t.view?.webContents.isAudioMuted(), tg: t.tg || null,
+      count: tabCount(t), capturing: !!t.capturing?.size, audible: !!t.view?.webContents.isCurrentlyAudible(), muted: !!t.view?.webContents.isAudioMuted(), tg: t.tg || null,
       code: t.resp?.badge || '', codeTitle: t.resp ? t.resp.chain.map(h => `${h.code} ${h.url}`).join('\n') : '',
       container: isTemp(t.container) ? { id: t.container, name: 'Disposable', color: '#ff6b7a', temp: true } : containerOf(t) || null,
     })),
@@ -595,8 +597,9 @@ function logRequest(t, d) {
   r.n++
   r.types.add(d.resourceType)
 }
-// kode HTTP halaman (termasuk redirect) -> badge di tab, mis. "301›200" atau "502". 200 biasa tanpa badge.
-const codeBadge = chain => chain.every(h => h.code >= 200 && h.code < 300) ? '' : chain.length > 3 ? `${chain[0].code}›…›${chain.at(-1).code}` : chain.map(h => h.code).join('›')
+// kode HTTP halaman -> badge pendek di tab: error terakhir (502), atau kode redirect pertama (301). 200 biasa tanpa badge.
+// Rantai lengkap (301 › 200) ada di tooltip tab & Site info.
+const codeBadge = chain => { const last = chain.at(-1).code; return last >= 300 ? String(last) : chain.length > 1 ? String(chain[0].code) : '' }
 
 function profileCtx(profileId, container) {
   const key = ctxKey(profileId, container)
@@ -681,7 +684,7 @@ function profileCtx(profileId, container) {
   ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, callback) => {
     const h = details.responseHeaders
     const tab = details.resourceType === 'mainFrame' && details.webContents && tabByWc.get(details.webContents)
-    if (tab) { // kode HTTP & header respons halaman (Site info)
+    if (tab && !/internal redirect/i.test(details.statusLine)) { // kode HTTP & header respons halaman (Site info); redirect buatan Almac/Chromium dilewati
       const prev = (tab.resp?.chain || []).filter((h, i, a) => !(i === a.length - 1 && h.url === details.url)) // ulang di URL sama (login 401) bukan redirect
       const chain = [...prev, { code: details.statusCode, url: details.url }].slice(-10)
       const headers = Object.entries(h || {}).flatMap(([k, vs]) => vs.map(v => [k, String(v).slice(0, 2000)])).slice(0, 200)
@@ -803,10 +806,11 @@ function wake(t, view) {
   wc.on('focus', () => { // klik di panel split lain -> panel itu jadi tab aktif (kolom alamat ikut)
     if (t !== activeTab() && isShown(t)) { t.lastActive = Date.now(); tabCtx(t).extensions.selectTab(wc); render(true) }
   })
-  wc.on('media-started-playing', () => { musicTab = t })
-  wc.on('audio-state-changed', () => render()) // ikon speaker di tab
+  wc.on('media-started-playing', () => { musicTab = t; t.playing = true })
+  wc.on('media-paused', () => { t.playing = false })
+  wc.on('audio-state-changed', () => { t.lastAudible = Date.now(); render() }) // ikon speaker di tab; mulai/berhenti bersuara = baru saja bersuara
   wc.on('context-menu', (_, p) => pageMenu(wc, t, p).popup({ window: win }))
-  wc.on('dom-ready', () => applyBoost(wc))
+  wc.on('dom-ready', () => { applyBoost(wc); viewJson(wc) })
   // renderer crash: tab di belakang ditidurkan (dimuat ulang saat dipilih), tab yang tampil -> tanya muat ulang
   wc.on('render-process-gone', (_, d) => {
     if (d.reason === 'clean-exit' || !state.tabs.includes(t)) return
@@ -829,7 +833,7 @@ function wake(t, view) {
   })
   wc.on('did-start-navigation', ({ url, isMainFrame, isSameDocument }) => {
     if (!isMainFrame || isSameDocument) return
-    t.resp = null; t.reqs = null // log request & header respons milik halaman baru
+    t.resp = null; t.reqs = null; t.capturing = null; t.playing = false // log request, header, status meeting/media milik halaman baru
     if (t.loadError) { t.loadError = null; layout(); render() }
     clearTimeout(t.httpsTimer)
     // HTTPS-First: versi https tidak menjawab dalam 5 detik -> hentikan & tawarkan http (Chrome: 3 detik)
@@ -885,6 +889,10 @@ function dropTemp(profileId, container) {
   delete ctx[key]
   c.ses.clearData().catch(() => {})
 }
+
+// tab sibuk = jangan ditidurkan otomatis: meeting (kamera/mikrofon aktif), share layar, media diputar (walau di-mute),
+// bersuara dalam 5 menit terakhir (jeda antar lagu / bagian sunyi), atau tab musik terakhir (widget radio)
+const busy = t => !!(t.sharing || t.capturing?.size || t.playing || t.view?.webContents.isCurrentlyAudible() || Date.now() - (t.lastAudible || 0) < 5 * 60000 || t === musicTab)
 
 function sleep(t) {
   if (!t.view) return
@@ -953,7 +961,7 @@ async function openGlance(url, profileId = state.activeProfile, container) {
   const wc = view.webContents
   const mine = () => glance?.view === view // listener mati sendiri setelah glance ditutup / jadi tab
   for (const ev of ['page-title-updated', 'did-navigate', 'did-navigate-in-page']) wc.on(ev, () => mine() && glanceInfo())
-  wc.on('dom-ready', () => mine() && applyBoost(wc))
+  wc.on('dom-ready', () => { if (mine()) { applyBoost(wc); viewJson(wc) } })
   wc.on('context-menu', (_, p) => mine() && pageMenu(wc, { profileId, container }, p).popup({ window: win }))
   wc.on('before-input-event', (e, i) => {
     if (!mine() || i.type !== 'keyDown') return
@@ -989,6 +997,8 @@ function applyBoost(wc) {
   if (b.css) wc.insertCSS(b.css, { cssOrigin: 'user' }).catch(() => {}) // user stylesheet: !important-nya menang dari CSS situs
   if (b.js) wc.executeJavaScript(`try {\n${b.js}\n} catch (e) { console.error('Almac Boost:', e) }`).catch(() => {})
 }
+// respons JSON -> viewer pohon (viewer.js); CSS menyusul hanya kalau halamannya memang JSON
+const viewJson = wc => wc.executeJavaScript(`(${jsonView})()`, true).then(ok => ok && wc.insertCSS(JSON_VIEW_CSS)).catch(() => {})
 // Zap: sorot elemen di bawah kursor, klik = sembunyikan & kembalikan selector CSS-nya. Dijalankan di halaman (toString).
 function zapPage() {
   return new Promise(done => {
@@ -1163,6 +1173,14 @@ function toUrl(input) {
 }
 
 const toast = text => win?.webContents.send('toast', text)
+// "What's new": catatan rilis versi yang terpasang (RELEASE_NOTES.md ikut dibundel), tanpa bagian cara install/update
+function whatsNew() {
+  let md = ''
+  try { md = fs.readFileSync(path.join(__dirname, 'RELEASE_NOTES.md'), 'utf8') } catch {}
+  md = md.split(/^##\s+(?:Install|Update)\b/m)[0].replace(/^.*Generated with \[Claude Code\].*$/m, '').trim()
+  return { version: app.getVersion(), notes: md }
+}
+const showWhatsNew = () => win?.webContents.send('whats-new', whatsNew())
 // tab di workspace aktif, urutan sama dengan sidebar (dipin dulu) -> ⌘1-9, ⌃Tab
 const wsTabs = () => state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === activeWs()).sort((a, b) => !!b.pinned - !!a.pinned)
 const BACKUP_FILES = ['state.json', 'bookmarks.json', 'history.json', 'passwords.vault']
@@ -1468,7 +1486,7 @@ const commands = {
     win?.webContents.send('toast', 'Pinned tab kept. Right-click it to unpin or close')
   },
   sleepTab: id => { const t = state.tabs.find(t => t.id === id); if (t && !isShown(t)) { sleep(t); render() } },
-  sleepOthers: id => { for (const t of state.tabs) if (t.id !== id && t.view && !isShown(t) && !t.view.webContents.isCurrentlyAudible()) sleep(t); render() },
+  sleepOthers: id => { for (const t of state.tabs) if (t.id !== id && t.view && !isShown(t) && !busy(t)) sleep(t); render() },
   copyUrl: id => clipboard.writeText(state.tabs.find(t => t.id === id)?.url || ''),
   modalClose: () => { modalOpen = false; layout() },
   sidebarToggle: () => {
@@ -1573,6 +1591,7 @@ const commands = {
   updateCheck: () => updater.check({ manual: true }),
   updateDownload: async () => { await updater.download(); updater.install() }, // tombol "Update & Restart"
   updateInstall: () => updater.install(),
+  whatsNew: showWhatsNew,
   passwords: () => {
     try { clipboard.writeText(new URL(activeTab()?.url).hostname.replace(/^www\./, '')) } catch {}
     shell.openPath('/System/Applications/Passwords.app')
@@ -2041,6 +2060,66 @@ queries.requestLog = async () => {
   return { host: hostOf(t.url), url: t.url, rows: rows.sort((a, b) => a.third - b.third || b.n - a.n) }
 }
 queries.certTrust = () => Object.keys(state.certTrust).sort()
+
+// ---- tools cepat di ⌘K: hash, DNS, WHOIS, IP publik (JWT, base64, URL dikerjakan di UI) ----
+const hostArg = s => { try { return new URL(/^[a-z]+:\/\//i.test(s) ? s : 'http://' + s).hostname.replace(/^\[|\]$/g, '') } catch { return s } }
+async function dnsLookup(input) {
+  const host = hostArg(input)
+  if (!host) throw new Error('Type a host name or IP')
+  const r = new (require('dns').promises.Resolver)({ timeout: 3000, tries: 2 })
+  if (require('net').isIP(host)) return `PTR  ${host}\n` + (await r.reverse(host).catch(e => ['(' + e.code + ')'])).map(n => '     ' + n).join('\n')
+  const fmt = (t, v) => t === 'MX' ? `${v.priority} ${v.exchange}` : t === 'TXT' ? v.join('') : t === 'SOA' ? `${v.nsname} ${v.hostmaster} serial ${v.serial}` : t === 'CAA' ? `${v.critical} ${Object.entries(v).find(([k]) => !['critical', 'type'].includes(k))?.join(' ')}` : v
+  const types = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA', 'CAA']
+  // record tidak ada (ENODATA) = dilewati; error lain (timeout, ditolak resolver) ditampilkan, jangan diam-diam hilang
+  const res = await Promise.all(types.map(t => r.resolve(host, t).then(v => [t, [].concat(v)], e => [t, ['ENODATA', 'ENOTFOUND'].includes(e.code) ? [] : null, e.code])))
+  const lines = res.flatMap(([t, vs, err]) => vs ? vs.map(v => `${t.padEnd(6)}${fmt(t, v)}`) : [`${t.padEnd(6)}⚠ ${err}`])
+  // jawaban resolver Chromium (DoH / DNS VPN) bisa beda dengan DNS sistem -> tampilkan juga
+  const t = activeTab(), ses = (t ? tabCtx(t) : profileCtx(state.activeProfile)).ses
+  const almacIps = await ses.resolveHost(host).then(x => [...new Set(x.endpoints.map(e => e.address))], () => [])
+  return `${host} · resolver ${r.getServers().join(', ')}\n\n${lines.join('\n') || 'No records found.'}\n\nAlmac resolves to: ${almacIps.join(', ') || '(nothing)'}${state.dnsMode === 'doh' ? ' (DNS-over-HTTPS)' : ''}`
+}
+function whoisQuery(server, q) {
+  return new Promise((resolve, reject) => {
+    let out = ''
+    const sock = require('net').connect(43, server, () => sock.write(q + '\r\n'))
+    sock.setTimeout(8000, () => { sock.destroy(); reject(new Error('WHOIS server ' + server + ' did not answer')) })
+    sock.on('data', d => { out += d; if (out.length > 300000) sock.destroy() })
+    sock.on('close', () => resolve(out))
+    sock.on('error', reject)
+  })
+}
+// WHOIS ikut rujukan: IANA -> registry TLD/RIR -> registrar (maks. 3 lompatan). ponytail: TCP langsung, tidak lewat proxy profil
+async function whois(input) {
+  let q = hostArg(input)
+  if (!q) throw new Error('Type a domain or IP')
+  if (!require('net').isIP(q)) q = getDomain(q) || q
+  const hops = ['whois.iana.org']
+  let text = await whoisQuery(hops[0], q)
+  for (let i = 0; i < 2; i++) {
+    const next = /^\s*(?:refer|whois|Registrar WHOIS Server|ReferralServer):\s*(?:whois:\/\/)?([a-z0-9.-]+\.[a-z]{2,})\s*$/im.exec(text)?.[1]?.toLowerCase()
+    if (!next || hops.includes(next)) break
+    const more = await whoisQuery(next, q).catch(() => '')
+    if (!more.trim()) break
+    hops.push(next); text = more
+  }
+  return `${q} · ${hops.join(' → ')}\n\n${text.trim()}`
+}
+// IP publik lewat sesi profil/tab aktif -> kalau profil memakai proxy, yang tampil IP keluar proxy itu
+async function publicIp() {
+  const t = activeTab(), ses = (t ? tabCtx(t) : profileCtx(state.activeProfile)).ses
+  const kv = Object.fromEntries((await (await ses.fetch('https://www.cloudflare.com/cdn-cgi/trace', { cache: 'no-store' })).text()).trim().split('\n').map(l => l.split('=')))
+  const p = profileOf(t?.profileId || state.activeProfile)
+  return [['IP', kv.ip], ['Country', kv.loc], ['Cloudflare PoP', kv.colo], ['HTTP', kv.http], ['TLS', kv.tls], ['Profile', p.name + (viaProxy(p.id) ? ' (through its proxy)' : '')]]
+    .filter(([, v]) => v).map(([k, v]) => k.padEnd(16) + v).join('\n')
+}
+queries.tool = async ({ kind, arg = '' } = {}) => {
+  arg = String(arg).trim().slice(0, 100000)
+  if (kind === 'hash') return Object.fromEntries(['md5', 'sha1', 'sha256', 'sha512'].map(a => [a, crypto.createHash(a).update(arg).digest('hex')]))
+  if (kind === 'dns') return dnsLookup(arg)
+  if (kind === 'whois') return whois(arg)
+  if (kind === 'ip') return publicIp()
+  return null
+}
 // ---- Almac Passwords: perintah dari UI ----
 const needVault = fn => (...a) => { if (!vault.unlocked()) throw new Error('Passwords are locked'); pwTouch(); return fn(...a) }
 // catatan perangkat internal (IP, VLAN, PIC, catatan) per host, disimpan terenkripsi di brankas yang sama dengan password
@@ -2143,6 +2222,15 @@ ipcMain.on('tab-badge', (e, n) => {
   const t = state.tabs.find(t => t.view?.webContents === e.sender)
   if (!t || typeof n !== 'number' || t.badge === n) return
   t.badge = n
+  render()
+})
+// kamera/mikrofon dipakai (media-preload.js), per frame (Teams/Zoom bisa meeting di iframe)
+ipcMain.on('tab-capture', (e, live) => {
+  const t = tabByWc.get(e.sender)
+  if (!t) return
+  const key = e.processId + ':' + e.frameId
+  t.capturing ||= new Set()
+  live ? t.capturing.add(key) : t.capturing.delete(key)
   render()
 })
 // counter tab: Badging API, atau angka di judul ("(3) WhatsApp", "Inbox (12) - Gmail"). -1 = titik tanpa angka
@@ -2441,6 +2529,7 @@ function buildMenu() {
       submenu: [
         { role: 'about' },
         { label: 'Check for Updates…', click: () => { updater.check({ manual: true }); send('open-update')() } },
+        { label: 'What\'s New…', click: showWhatsNew },
         { type: 'separator' },
         { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('open-settings') },
         ...(MAC ? [{ type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }] : []), { type: 'separator' }, { role: 'quit' },
@@ -2655,13 +2744,16 @@ app.whenReady().then(async () => {
   if (!globalShortcut.register(QUICK_KEY, toggleSpotlight)) toast(keyText(QUICK_KEY) + ' is taken by another app, so Quick Search is in the File menu only')
   if (state.music?.on) toggleMusic()
   if (state.pet.out) petOut(true)
+  // baru di-update ke versi ini -> tampilkan "What's new" sekali
+  if (FRESH_INSTALL) state.seenVersion = app.getVersion()
+  else if (state.seenVersion !== app.getVersion()) setTimeout(() => { state.seenVersion = app.getVersion(); render(true); showWhatsNew() }, 1500)
 
   setInterval(() => {
     if (!win) return
     const now = Date.now()
     for (const t of state.tabs) {
       // hemat memori: tab tidak aktif (tidak tampil, tidak bersuara) ditidurkan setelah state.sleepAfter menit
-      if (state.sleepAfter && t.view && !isShown(t) && !t.sharing && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !t.view.webContents.isCurrentlyAudible() && t !== musicTab) sleep(t)
+      if (state.sleepAfter && t.view && !isShown(t) && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !busy(t)) sleep(t)
     }
     if (vault.unlocked() && now - pwLastUse > state.pwLockAfter * 60000) pwLock()
     if (process.platform === 'darwin' && app.getBadgeCount()) app.setBadgeCount(0) // badge dari service worker (tanpa preload): Dock tetap bersih
