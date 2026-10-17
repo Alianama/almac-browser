@@ -24,7 +24,9 @@ fs.rmSync(dist, { recursive: true, force: true })
 // ("Almac Browser Safe Storage") cukup diberi sekali. Tanpa sertifikat: ad-hoc, macOS bertanya lagi setelah tiap update.
 const identity = /"Apple Development: ([^"]+)"/.exec(execFileSync('security', ['find-identity', '-v', '-p', 'codesigning']).toString())?.[1]
 console.log(identity ? 'signing as Apple Development: ' + identity : 'no Apple Development certificate: ad-hoc signing')
-run('npx', ['electron-builder', '--mac', '--publish', 'never', ...(identity ? ['-c.mac.identity=' + identity] : [])])
+// tanpa timestamp Apple: hanya perlu untuk notarisasi (Almac tidak dinotarisasi), dan server timestamp.apple.com gagal
+// ~1 dari 15 kali -> dari ratusan file yang ditandatangani, build hampir selalu gagal
+run('npx', ['electron-builder', '--mac', '--publish', 'never', '-c.mac.timestamp=none', ...(identity ? ['-c.mac.identity=' + identity] : [])])
 
 run('npx', ['electron-builder', '--win', '--x64', '--publish', 'never'])
 
