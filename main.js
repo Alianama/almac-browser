@@ -80,7 +80,7 @@ process.on('uncaughtException', e => {
 })
 
 let win, blocker, updater
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, seenVersion: '', focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', skin: 'classic', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, seenVersion: '', focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -198,11 +198,12 @@ async function pickScreen(request) {
   const asker = state.tabs.find(t => t.view && request.frame && t.view.webContents === webContentsOf(request.frame))
   const perm = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted'
   // layar/jendela hanya kalau izin sudah ada (kalau belum, getSources memunculkan prompt macOS tiap meeting)
-  const sources = perm === 'granted' ? await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 200 }, fetchWindowIcons: true }) : []
+  // getSources/capturePage bisa lambat atau macet (view tersembunyi): dibatasi waktu, supaya picker tetap muncul & Meet tidak error
+  const sources = perm === 'granted' ? await within(desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 200 }, fetchWindowIcons: true }), 4000, []) : []
   const list = sources.filter(s => !['Almi', 'Radio'].includes(s.name))
   const tabs = state.tabs.filter(t => t.profileId === (asker?.profileId ?? state.activeProfile) && /^https?:/.test(t.url || ''))
   const tabThumbs = await Promise.all(tabs.map(async t => {
-    const img = t.view && await t.view.webContents.capturePage().catch(() => null)
+    const img = t.view && await within(t.view.webContents.capturePage(), 1000, null)
     return img && !img.isEmpty() ? 'data:image/jpeg;base64,' + img.resize({ width: 320 }).toJPEG(65).toString('base64') : ''
   }))
   const id = ++screenSeq
@@ -226,6 +227,7 @@ async function pickScreen(request) {
   const src = list.find(s => s.id === chosen?.sourceId)
   return src ? { video: src } : null
 }
+const within = (p, ms, fallback) => Promise.race([p.catch(() => fallback), new Promise(r => setTimeout(() => r(fallback), ms))])
 const webContentsOf = frame => { try { return require('electron').webContents.fromFrame(frame) } catch { return null } }
 
 // DNS-over-HTTPS berlaku untuk seluruh app (Chromium: satu resolver untuk semua sesi)
@@ -304,6 +306,7 @@ function load() {
   state = { ...state, ...readJson(STATE_FILE) }
   if (typeof state.pet !== 'object' || !state.pet) state.pet = { out: state.pet !== false } // dulu boolean
   state.dl = { mode: 'auto', dir: '', lastDir: '', ...state.dl }
+  if (!(state.skin in SKINS)) state.skin = 'classic'
   if (!state.profiles.length) state.profiles.push({ id: 'p1', name: 'Personal', color: '#41a6f6' })
   if (!state.profiles.some(p => p.id === state.activeProfile)) state.activeProfile = state.profiles[0].id
   state.profiles.forEach(workspaces)
@@ -464,7 +467,7 @@ async function importRun({ browser, dir, bookmarks: wantBookmarks, history: want
 }
 
 function addHistory(t, visit) {
-  if (!/^https?:/.test(t.url) || profileOf(t.profileId)?.ephemeral) return // privat: tidak dicatat
+  if (!/^https?:/.test(t.url) || profileOf(t.profileId)?.ephemeral || profileOf(t.profileId)?.tempAfter) return // privat & profil sementara: tidak dicatat
   let h = histEntry(t.profileId, t.url)
   if (!h) { h = { url: t.url, title: '', ts: 0, n: 0, p: t.profileId }; history.push(h); histIdx.set(h.p + '\n' + h.url, h) }
   h.title = t.title || h.title
@@ -492,7 +495,7 @@ function flush() {
     accent: profileOf(state.activeProfile).workspaces.find(w => w.id === activeWs())?.color || profileOf(state.activeProfile).color,
     tabs: state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === activeWs()).sort((a, b) => !!b.pinned - !!a.pinned).map(t => ({
       id: t.id, title: t.title || t.url || 'New tab', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
-      pinned: !!t.pinned, atPin: !t.pinned || t.url === t.pinUrl,
+      pinned: !!t.pinned, atPin: !t.pinned || t.url === t.pinUrl, pinUrl: t.pinUrl || '', loading: !!t.loadStart,
       count: tabCount(t), capturing: !!t.capturing?.size, audible: !!t.view?.webContents.isCurrentlyAudible(), muted: !!t.view?.webContents.isAudioMuted(), tg: t.tg || null,
       code: t.resp?.badge || '', codeTitle: t.resp ? t.resp.chain.map(h => `${h.code} ${h.url}`).join('\n') : '',
       container: isTemp(t.container) ? { id: t.container, name: 'Disposable', color: '#ff6b7a', temp: true } : containerOf(t) || null,
@@ -500,11 +503,12 @@ function flush() {
     tabGroups: state.tabGroups,
     url: active?.url || active?.loadError?.url || '',
     loadError: active?.loadError || null,
+    loading: active?.loadStart ? { progress: active.progress || 0.1, since: active.loadStart, host: hostOf(active.url) } : null,
     security: security(active),
     bookmarked: !!active && isBookmarked(active.profileId, active.url),
     blocked: active?.blocked || 0,
     adblock: !!blocker,
-    theme: state.theme,
+    theme: state.theme, skin: state.skin,
     sidebar: { ...state.sidebar, width: sideWidth() },
     bookmarkBar: state.bookmarkBar,
     split: (() => { const v = visibleTabs(); return v.length === 2 ? { ratio: state.splitRatio[v[0].group] ?? 0.5, activeSide: v.indexOf(activeTab()) } : null })(),
@@ -528,9 +532,9 @@ function flush() {
   })
   const petState = JSON.stringify({ sleeping: !state.tabs.some(t => t.view), today: state.stats[dayKey()] || 0 })
   if (petWin && petState !== petSent) { petSent = petState; petWin.webContents.send('pet-state', JSON.parse(petState)) }
-  // profil privat tidak pernah ditulis ke disk
+  // profil privat tidak pernah ditulis ke disk; tab profil sementara tidak dipulihkan setelah restart
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
-  const tabs = state.tabs.filter(t => !priv.has(t.profileId) && !isTemp(t.container)).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container }))
+  const tabs = state.tabs.filter(t => !priv.has(t.profileId) && !isTemp(t.container) && !profileOf(t.profileId)?.tempAfter).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container }))
   for (const gid in state.tabGroups) if (!state.tabs.some(t => t.tg === gid)) delete state.tabGroups[gid] // grup tanpa tab dibuang
   const profiles = state.profiles.filter(p => !p.ephemeral)
   const sitePerms = Object.fromEntries(Object.entries(state.sitePerms).filter(([id]) => !priv.has(id)))
@@ -796,7 +800,24 @@ function wake(t, view) {
     if (disposition === 'background-tab') n.lastActive = (t.lastActive || Date.now()) - 1
     return { action: 'deny' }
   })
-  const sync = visit => { t.url = wc.getURL(); t.title = wc.getTitle(); addHistory(t, visit); render() }
+  const live = () => t.view?.webContents === wc // halaman yang sedang ditutup (unload) tidak boleh mengubah tab lagi
+  const sync = visit => { if (!live()) return; t.url = wc.getURL(); t.title = wc.getTitle(); addHistory(t, visit); render() }
+  // video fullscreen (YouTube, Netflix, ...): halaman menutupi seluruh jendela seperti Chrome, tanpa sidebar & bar
+  // (jendelanya sendiri masuk/keluar fullscreen oleh Electron; jangan ikut memanggil setFullScreen, keluar-nya jadi macet)
+  wc.on('enter-html-full-screen', () => { htmlFull = t; layout() })
+  wc.on('leave-html-full-screen', () => { if (htmlFull === t) { htmlFull = null; layout() } })
+  // tab dipin terkunci ke situsnya: link ke situs lain dibuka di tab baru (ubah lewat "Edit pinned tab")
+  wc.on('will-navigate', e => {
+    if (!pinLocked(t, e.url)) return
+    e.preventDefault()
+    newTab(e.url, t.profileId, true, t.container)
+  })
+  // progres muat: mulai navigasi -> respons datang -> DOM siap -> selesai (Electron tidak memberi persentase)
+  const progress = p => { if (!live()) return; t.progress = p; if (p >= 1) t.loadStart = 0; render() }
+  wc.on('did-start-navigation', ({ isMainFrame, isSameDocument }) => { if (isMainFrame && !isSameDocument && live()) { t.loadStart = Date.now(); progress(0.1) } })
+  wc.on('did-navigate', () => progress(0.45))
+  wc.on('dom-ready', () => progress(0.8))
+  wc.on('did-stop-loading', () => progress(1))
   // navigator.userAgent (JS) di halaman login sama dengan header (konsisten), situs lain Chrome
   wc.on('did-start-navigation', ({ url, isMainFrame, isSameDocument }) => {
     if (!isMainFrame || isSameDocument) return
@@ -820,7 +841,7 @@ function wake(t, view) {
   // HTTPS-Only: versi https gagal -> tawarkan buka versi http (tidak aman)
   // halaman gagal dimuat -> halaman error Almac (bukan layar putih)
   wc.on('did-fail-load', (_, code, desc, url, isMainFrame) => {
-    if (!isMainFrame || code === -3) return // -3 = dibatalkan (pindah halaman, tombol stop)
+    if (!isMainFrame || code === -3 || !live()) return // -3 = dibatalkan (pindah halaman, tombol stop)
     if (t.lookalike?.url === url) { const l = t.lookalike; t.lookalike = null; return setLoadError(t, { kind: 'lookalike', code: 'LOOKALIKE_DOMAIN', url, host: hostOf(url), shown: l.host, target: l.target }) }
     const https = url.replace(/^http:/, 'https:') // juga kasus https -> redirect balik ke http (loop)
     if (upgraded.has(https)) { // HTTPS-Only: versi https gagal -> tawarkan http
@@ -896,10 +917,41 @@ const busy = t => !!(t.sharing || t.capturing?.size || t.playing || t.view?.webC
 
 function sleep(t) {
   if (!t.view) return
-  win?.contentView.removeChildView(t.view)
-  shownViews = shownViews.filter(v => v !== t.view)
-  t.view.webContents.close()
+  const view = t.view
+  if (htmlFull === t) htmlFull = null
+  win?.contentView.removeChildView(view)
+  shownViews = shownViews.filter(v => v !== view)
   t.view = null
+  t.loadStart = 0
+  closePage(view.webContents)
+}
+// tutup halaman seperti Chrome menutup tab: dialog beforeunload dilewati, tapi pagehide/unload tetap dijalankan.
+// close() biasa membunuh halaman tanpa unload -> Meet/Zoom/Teams tidak sempat mengirim "keluar", sesi meeting tertinggal.
+function closePage(wc) {
+  if (wc.isDestroyed()) return
+  wc.on('will-prevent-unload', e => e.preventDefault())
+  wc.close({ waitForBeforeUnload: true })
+  setTimeout(() => { if (!wc.isDestroyed()) wc.close() }, 3000) // halaman macet di unload
+}
+
+// ---- tidur pintar: batas dasar (Settings) dikali sesuai isi tab ----
+// aplikasi (mail, chat, docs) & tab dipin/bernotifikasi bangun lebih lama (notifikasi tidak hilang), tab ringan juga;
+// tab berat (>700 MB) tidur lebih cepat. Tab yang sedang diisi (teks belum terkirim) tidak ditidurkan.
+const APP_HOSTS = /(^|\.)(mail\.google\.com|calendar\.google\.com|docs\.google\.com|chat\.google\.com|outlook\.(office|office365|live)\.com|teams\.(microsoft|live)\.com|app\.slack\.com|discord\.com|web\.whatsapp\.com|web\.telegram\.org|messenger\.com|notion\.so|figma\.com|linear\.app)$/
+function sleepDelay(t, mem) {
+  const mb = mem.get(t.view.webContents.getOSProcessId()) || 0
+  let x = APP_HOSTS.test(hostOf(t.url)) ? 6 : t.pinned || tabCount(t) ? 3 : mb && mb < 150 ? 2 : 1
+  if (mb > 700) x = Math.max(1, x / 2)
+  return state.sleepAfter * 60000 * x
+}
+const idleSince = t => Math.max(t.lastActive || 0, t.seenAt || 0) // seenAt: terakhir tampil di layar
+const DIRTY_JS = `[...document.querySelectorAll('textarea, input:is([type=text], [type=email], [type=url], [type=tel], [type=number], :not([type]))')].some(e => e.value && e.value !== e.defaultValue)`
+function sleepIfIdle(t) {
+  const wc = t.view.webContents
+  // halaman tidak menjawab dalam 2 detik = anggap sedang dipakai (jangan buang ketikan)
+  within(wc.executeJavaScript(DIRTY_JS), 2000, true).then(dirty => {
+    if (!dirty && t.view?.webContents === wc && !isShown(t) && !busy(t)) { sleep(t); render() }
+  })
 }
 
 // tab yang tampil: tab aktif + pasangan split-nya (kiri/kanan sesuai urutan di daftar tab)
@@ -920,15 +972,22 @@ function paneBounds(count, group) {
 }
 let shownViews = []
 const isShown = t => !!t.view && shownViews.includes(t.view)
+let htmlFull = null // tab yang sedang fullscreen (video): menutupi seluruh jendela
 function layout() {
   if (!win) return
-  const tabs = modalOpen || peeking || covered || glance ? [] : visibleTabs().filter(t => !t.loadError) // halaman error tampil di UI; glance: tab diganti snapshot
+  if (htmlFull && !(visibleTabs().includes(htmlFull) && htmlFull.view)) { // pindah tab saat video fullscreen -> keluar dari fullscreen
+    htmlFull.view?.webContents.executeJavaScript('document.fullscreenElement && document.exitFullscreen()', true).catch(() => {})
+    htmlFull = null
+  }
+  const full = !modalOpen && htmlFull
+  const tabs = full ? [full] : modalOpen || peeking || covered || glance ? [] : visibleTabs().filter(t => !t.loadError) // halaman error tampil di UI; glance: tab diganti snapshot
   for (const t of tabs) if (!t.view) wake(t) // pasangan split ikut dihidupkan
   const views = tabs.map(t => t.view).filter(Boolean)
-  for (const v of shownViews) if (!views.includes(v)) win.contentView.removeChildView(v)
+  for (const v of shownViews) if (!views.includes(v)) { win.contentView.removeChildView(v); const x = tabByWc.get(v.webContents); if (x) x.seenAt = Date.now() }
   shownViews = views
-  const bounds = paneBounds(views.length, tabs[0]?.group)
-  views.forEach((v, i) => { win.contentView.addChildView(v); v.setBounds(bounds[i]) })
+  const [w, h] = win.getContentSize()
+  const bounds = full ? [{ x: 0, y: 0, width: w, height: h }] : paneBounds(views.length, tabs[0]?.group)
+  views.forEach((v, i) => { win.contentView.addChildView(v); v.setBorderRadius(full ? 0 : 10); v.setBounds(bounds[i]) })
   if (glance) {
     if (modalOpen) win.contentView.removeChildView(glance.view)
     else { win.contentView.addChildView(glance.view); glance.view.setBounds(glanceBounds()); glanceInfo() }
@@ -984,7 +1043,7 @@ function closeGlance(keepView) {
   const { view } = glance
   glance = null
   win?.contentView.removeChildView(view)
-  if (!keepView) view.webContents.close()
+  if (!keepView) closePage(view.webContents)
   win?.webContents.send('glance', null)
   layout()
 }
@@ -1064,10 +1123,17 @@ function closeTab(t) {
   next ? selectTab(next) : (layout(), render())
 }
 
+// tab dipin terkunci ke situs (domain) pin-nya. Halaman login SSO tetap boleh (sesi habis di Gmail, Outlook, ...).
+// ponytail: host login dikenali dari namanya; tambahkan di AUTH_HOST kalau login di tab dipin malah terbuka di tab baru
+const siteOf = url => { const h = hostOf(url); return getDomain(h) || h }
+const AUTH_HOST = /(^|\.)(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|appleid\.apple\.com|okta\.com|auth0\.com|onelogin\.com)$|^(login|auth|sso|id)\./
+const pinLocked = (t, url) => !!t.pinned && !!t.pinUrl && /^https?:/.test(url || '') && siteOf(url) !== siteOf(t.pinUrl) && !AUTH_HOST.test(hostOf(url))
+
 // buka url di tab aktif (tab kosong dihidupkan dulu), atau tab baru kalau tidak ada tab
 function goTo(url) {
   const t = activeTab()
   if (!t) return newTab(url)
+  if (pinLocked(t, url)) { toast(`Pinned tab stays on ${siteOf(t.pinUrl)}, opened in a new tab. Right-click it › Edit pinned tab to change`); return newTab(url, t.profileId, true, t.container) }
   if (t.view) return t.view.webContents.loadURL(url)
   t.url = url
   wake(t)
@@ -1208,6 +1274,7 @@ const commands = {
   back: () => activeTab()?.view?.webContents.navigationHistory.goBack(),
   forward: () => activeTab()?.view?.webContents.navigationHistory.goForward(),
   reload: () => activeTab()?.view?.webContents.reload(),
+  reloadOrStop: () => { const wc = activeTab()?.view?.webContents; wc?.isLoading() ? wc.stop() : wc?.reload() }, // tombol reload = stop saat memuat
   switchProfile: id => {
     state.activeProfile = id
     const t = activeTab()
@@ -1258,7 +1325,7 @@ const commands = {
     if (key === 'searchEngine' && ENGINES[value]) state.searchEngine = value
     if (key === 'newTabPage' && ['almac', 'engine'].includes(value)) state.newTabPage = value
     if (key === 'bookmarkBar') { state.bookmarkBar = !!value; layout() }
-    if (key === 'sleepAfter' && [0, 5, 10, 30].includes(value)) state.sleepAfter = value
+    if (key === 'sleepAfter' && [0, 5, 10, 30, 60].includes(value)) state.sleepAfter = value
     if (key === 'dnsMode' && ['auto', 'doh', 'off'].includes(value)) { state.dnsMode = value; applyDns() }
     if (key === 'customDns') { state.customDns = (value || '').trim(); applyDns() }
     if (key === 'blockJavaScript') {
@@ -1278,12 +1345,14 @@ const commands = {
     if (key === 'focusSites' && Array.isArray(value)) state.focus.sites = [...new Set(value.map(s => String(s).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')).filter(Boolean))].slice(0, 100)
     render(true)
   },
-  profileUpdate: ({ id, name, color, icon }) => {
+  profileUpdate: ({ id, name, color, icon, tempAfter }) => {
     const p = profileOf(id)
     if (!p) return
     if (name?.trim()) p.name = name.trim().slice(0, 24)
     if (/^#[0-9a-f]{6}$/i.test(color || '')) p.color = color
     p.icon = icon || ''
+    // profil sementara: tab yang tidak dipakai ditutup sendiri setelah tempAfter menit, tanpa riwayat, tidak dipulihkan saat restart
+    if ([0, 5, 15, 30, 60].includes(tempAfter) && !p.ephemeral) { if (tempAfter) p.tempAfter = tempAfter; else delete p.tempAfter }
     render(true)
   },
 
@@ -1469,6 +1538,14 @@ const commands = {
     t.pinned = !t.pinned
     if (t.pinned) t.pinUrl = t.url; else delete t.pinUrl
     render(true)
+  },
+  // "Edit pinned tab": satu-satunya cara memindah tab dipin ke situs lain
+  pinEdit: ({ id, url }) => {
+    const t = state.tabs.find(t => t.id === id)
+    if (!t?.pinned || !String(url || '').trim()) return
+    t.pinUrl = toUrl(String(url))
+    t.view ? t.view.webContents.loadURL(t.pinUrl) : (t.url = t.pinUrl)
+    selectTab(t)
   },
   pinReset: id => { const t = state.tabs.find(t => t.id === id); if (t?.pinUrl) { t.view ? t.view.webContents.loadURL(t.pinUrl) : (t.url = t.pinUrl, selectTab(t)) } },
   closePinned: id => { const t = state.tabs.find(t => t.id === id); if (t) { t.pinned = false; closeTab(t) } },
@@ -1906,6 +1983,12 @@ const commands = {
     app.relaunch(); app.exit(0) // exit (bukan quit): before-quit tidak menimpa data hasil restore
   },
 
+  skin: id => {
+    if (!SKINS[id]) return
+    state.skin = id
+    if (!MAC) win?.setTitleBarOverlay?.(overlayColors())
+    render(true)
+  },
   theme: () => {
     const order = ['system', 'light', 'dark']
     state.theme = order[(order.indexOf(state.theme) + 1) % order.length]
@@ -2651,7 +2734,10 @@ function buildMenu() {
   ]))
 }
 
-const overlayColors = () => ({ color: nativeTheme.shouldUseDarkColors ? '#141623' : '#7eebd3', symbolColor: nativeTheme.shouldUseDarkColors ? '#f1f2f6' : '#111111', height: GAP + BAR_H })
+// tema pixel (ui/theme.css [data-skin]): [latar, teks] untuk tombol jendela Windows & latar jendela saat dibuka; classic ikut terang/gelap
+const SKINS = { classic: null, pastel: ['#ffd9ec', '#3b2a4a'], midnight: ['#0b1026', '#e6ebff'], horror: ['#0d0505', '#f2dede'], gaming: ['#090014', '#f0f6ff'], gameboy: ['#8bac0f', '#0f380f'], terminal: ['#020a02', '#7dff9a'], synthwave: ['#1a0b2e', '#fff0fb'] }
+const skinBg = () => SKINS[state.skin]?.[0] || (nativeTheme.shouldUseDarkColors ? '#141623' : '#7eebd3')
+const overlayColors = () => ({ color: skinBg(), symbolColor: SKINS[state.skin]?.[1] || (nativeTheme.shouldUseDarkColors ? '#f1f2f6' : '#111111'), height: GAP + BAR_H })
 nativeTheme.on('updated', () => { if (!MAC) win?.setTitleBarOverlay?.(overlayColors()) })
 
 app.whenReady().then(async () => {
@@ -2712,7 +2798,7 @@ app.whenReady().then(async () => {
   win = new BrowserWindow({
     width: 1280, height: 820, minWidth: SIDEBAR_MIN + PAGE_MIN + GAP * 2, minHeight: 400,
     title: 'Almac Browser',
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#141623' : '#7eebd3',
+    backgroundColor: skinBg(),
     // mac: tombol jendela di header sidebar. Windows: tombol jendela sistem (overlay) di strip atas kanan, setinggi strip itu
     ...(MAC ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 13 } } // titik tengah ~19.5px = tengah header sidebar (39px)
       : { titleBarStyle: 'hidden', titleBarOverlay: overlayColors() }),
@@ -2721,6 +2807,8 @@ app.whenReady().then(async () => {
   })
   win.on('resize', () => { layout(); render() }) // lebar sidebar efektif bisa berubah
   for (const ev of ['move', 'minimize', 'restore', 'enter-full-screen', 'leave-full-screen']) win.on(ev, petSync)
+  // keluar fullscreen lewat jendela (tombol hijau, ⌃⌘F) saat video fullscreen -> videonya ikut keluar
+  win.on('leave-full-screen', () => { htmlFull?.view?.webContents.executeJavaScript('document.fullscreenElement && document.exitFullscreen()', true).catch(() => {}) })
   win.setWindowButtonVisibility?.(state.sidebar.mode === 'pinned') // tombol jendela macOS ikut sidebar
   win.on('closed', () => { win = null; clearTimeout(renderTimer); spot?.destroy() }) // jendela ⌥Space tersembunyi jangan menahan app tetap jalan
   // geser 3 jari (macOS: Trackpad > More Gestures > Swipe between pages = 3 jari) di atas panel tab -> ganti workspace
@@ -2751,10 +2839,19 @@ app.whenReady().then(async () => {
   setInterval(() => {
     if (!win) return
     const now = Date.now()
+    const mem = new Map(app.getAppMetrics().map(m => [m.pid, m.memory.workingSetSize / 1024])) // pid -> MB
+    const expired = []
     for (const t of state.tabs) {
-      // hemat memori: tab tidak aktif (tidak tampil, tidak bersuara) ditidurkan setelah state.sleepAfter menit
-      if (state.sleepAfter && t.view && !isShown(t) && now - (t.lastActive || 0) > state.sleepAfter * 60000 && !busy(t)) sleep(t)
+      if (isShown(t)) { t.seenAt = now; continue }
+      if (busy(t)) continue
+      // profil sementara: tab tidak dipakai selama tempAfter menit ditutup (tab dipin tetap)
+      const temp = profileOf(t.profileId)?.tempAfter
+      if (temp && !t.pinned && now - idleSince(t) > temp * 60000) { expired.push(t); continue }
+      // hemat memori: tab tidak tampil & tidak bersuara ditidurkan, batasnya menyesuaikan isi tab (sleepDelay)
+      if (state.sleepAfter && t.view && now - idleSince(t) > sleepDelay(t, mem)) sleepIfIdle(t)
     }
+    expired.forEach(closeTab)
+    if (expired.length) toast(`Temporary profile: closed ${expired.length} unused ${expired.length === 1 ? 'tab' : 'tabs'} (⌘⇧T to reopen)`)
     if (vault.unlocked() && now - pwLastUse > state.pwLockAfter * 60000) pwLock()
     if (process.platform === 'darwin' && app.getBadgeCount()) app.setBadgeCount(0) // badge dari service worker (tanpa preload): Dock tetap bersih
     if (state.focus.until && !focusOn()) { state.focus.until = 0; win.webContents.send('toast', 'Focus session finished. Nice work!') }

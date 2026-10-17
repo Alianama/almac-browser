@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.3.8-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.3.9-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
@@ -25,6 +25,7 @@
 ### 🎨 Pixel-Aesthetic Design
 - Unique **pixel + glassmorphism** UI theme with animated Lucide icons
 - Full **light / dark / system** theme support
+- **8 pixel themes** — Classic, Pastel, Midnight, Horror, Gaming, Game Boy, Terminal, Synthwave
 - Animated sidebar with smooth workspace transitions
 - Customizable accent color per profile and workspace
 
@@ -79,6 +80,8 @@
 - Multiple **workspaces per profile** (like Arc browser)
 - Custom name, animated icon, and color per workspace
 - Swipe between workspaces with **2-finger trackpad gesture** or **3-finger swipe**
+- **Pinned tabs stay on their site** — links elsewhere open in a new tab; change it with Edit pinned tab
+- **Temporary profiles** — unused tabs close by themselves, no history kept
 
 ### 🌐 Extensions
 - Full **Chrome Extension (MV2 & MV3)** support via `electron-chrome-extensions`

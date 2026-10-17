@@ -13,12 +13,12 @@
     <div class="nav">
       <button data-cmd="back" title="Back (⌘[)" data-icon="back"></button>
       <button data-cmd="forward" title="Forward (⌘])" data-icon="forward"></button>
-      <button data-cmd="reload" title="Reload (⌘R)" data-icon="reload"></button>
+      <button data-cmd="reloadOrStop" id="reloadBtn" title="Reload (⌘R)" data-icon="reload"></button>
       <button data-cmd="newTab" title="New tab (⌘T)" data-icon="plus"></button>
     </div>
 
     <div class="search-wrap">
-      <div class="search glass"><button type="button" id="siteBtn" class="site-btn" title="Site info: connection, certificate, cookies, permissions"></button><input id="url" placeholder="Search Google or type a URL" spellcheck="false" autocomplete="off"><button type="button" id="zoomBtn" class="zoom-chip" title="Zoom for this site — click to reset to 100% (⌘0)" hidden></button><button type="button" id="starBtn" class="site-btn" title="Bookmark this page (⌘D)" data-icon="star"></button></div>
+      <div class="search glass" id="searchBox"><i class="url-progress"></i><button type="button" id="siteBtn" class="site-btn" title="Site info: connection, certificate, cookies, permissions"></button><input id="url" placeholder="Search Google or type a URL" spellcheck="false" autocomplete="off"><button type="button" id="zoomBtn" class="zoom-chip" title="Zoom for this site — click to reset to 100% (⌘0)" hidden></button><button type="button" id="starBtn" class="site-btn" title="Bookmark this page (⌘D)" data-icon="star"></button></div>
       <div id="suggest" class="suggest glass" hidden></div>
     </div>
 
@@ -79,6 +79,7 @@
     <button type="button" class="mini" id="findClose" title="Close (Esc)" data-icon="x"></button>
   </div>
   <div id="toast" hidden></div>
+  <div id="loadbar" hidden><i></i></div>
   <div id="glance" hidden><div id="glanceSnap" class="snaps"></div><div id="glanceFrame"></div>
     <div id="glanceBar" class="glass"><span class="g-meta"><b id="glanceTitle"></b><small id="glanceHost"></small></span>
       <button type="button" class="mini" data-cmd="glanceCopy" title="Copy link" data-icon="copy"></button>
@@ -928,7 +929,7 @@ almac.onScreenPick(async ({ id, host, permission, sources, tabs, audio }) => {
     onclick() { onSelect(); grid.querySelectorAll('.screen-card').forEach(c => c.classList.toggle('on', c === this)) },
     ondblclick() { onSelect(); pick() } },
     thumb ? el('img', { src: thumb, alt: '' }) : el('div', { className: 'screen-blank' }, icon ? el('img', { className: 'screen-fav', src: icon, alt: '' }) : ''),
-    el('span', {}, ...(icon ? [el('img', { className: 'screen-ico', src: icon, alt: '' })] : []), document.createTextNode(label)))
+    el('span', {}, ...(icon ? [el('img', { className: 'screen-ico', src: icon, alt: '' })] : []), el('span', { className: 'screen-label', textContent: label })))
   const show = kind => {
     chosen = null
     tabsBar.querySelectorAll('button').forEach(b => { b.classList.toggle('on', b.dataset.kind === kind); b.classList.toggle('ask', b.dataset.kind === kind) })
@@ -1248,6 +1249,45 @@ splitter.addEventListener('dblclick', () => almac.cmd('splitRatio', 0.5))
 
 const THEME_LABEL = { system: 'Theme: system', light: 'Theme: light', dark: 'Theme: dark' }
 
+// ---- progres memuat: garis di atas halaman + isian di kolom alamat, tombol reload jadi stop; lambat -> toast (klik = berhenti) ----
+let slowTimer, slowFor = 0
+function renderLoading(l) {
+  const box = $('#searchBox'), pct = l ? Math.round(l.progress * 100) + '%' : '0%'
+  $('#loadbar').hidden = !l
+  $('#loadbar').firstChild.style.width = pct
+  box.classList.toggle('loading', !!l)
+  box.style.setProperty('--progress', pct)
+  const rb = $('#reloadBtn')
+  if (rb.dataset.stop !== String(!!l)) { rb.dataset.stop = !!l; rb.replaceChildren(iconEl(l ? 'x' : 'reload')); rb.title = l ? 'Stop loading' : 'Reload (⌘R)' }
+  if (!l) { clearTimeout(slowTimer); slowFor = 0; return }
+  if (slowFor === l.since) return
+  slowFor = l.since
+  clearTimeout(slowTimer)
+  slowTimer = setTimeout(() => { if (lastState?.loading?.since === l.since) toast(`${l.host || 'This site'} is slow to respond, still waiting… Click to stop`, 'clock', () => almac.cmd('reloadOrStop')) }, Math.max(0, 8000 - (Date.now() - l.since)))
+}
+
+// ---- tema pixel: kartu pratinjau memakai token tema itu sendiri ([data-skin] di theme.css) ----
+const SKINS = [['classic', 'Classic'], ['pastel', 'Pastel'], ['midnight', 'Midnight'], ['horror', 'Horror'], ['gaming', 'Gaming'], ['gameboy', 'Game Boy'], ['terminal', 'Terminal'], ['synthwave', 'Synthwave']]
+function skinPicker(cur) {
+  const grid = el('div', { className: 'skin-grid' }, ...SKINS.map(([id, name]) => {
+    const b = el('button', { type: 'button', className: 'skin-card' + (id === cur ? ' on' : ''), title: name,
+      onclick() { almac.cmd('skin', id); grid.querySelectorAll('.skin-card').forEach(c => c.classList.toggle('on', c === this)) } },
+      el('span', { className: 'skin-prev' }, el('i'), el('i'), el('i')), el('span', { className: 'pixel', textContent: name }))
+    b.dataset.skin = id
+    return b
+  }))
+  return grid
+}
+
+// tab dipin terkunci ke situsnya; halamannya hanya bisa diganti di sini
+function editPinned(t) {
+  const input = el('input', { className: 'field', value: t.pinUrl || t.url || '', spellcheck: false, placeholder: 'https://…' })
+  openModal('Edit pinned tab', [
+    el('p', { className: 'modal-text', textContent: 'A pinned tab stays on its site: links to other sites open in a new tab. Change its page here.' }),
+    el('label', { className: 'row' }, el('span', { textContent: 'Pinned page' }), input),
+  ], [{ label: 'Cancel' }, { label: 'Save', primary: true, onClick: () => almac.cmd('pinEdit', { id: t.id, url: input.value }) }])
+}
+
 almac.onState(s => {
   // sidebar: mode & lebar (jangan timpa saat sedang diseret)
   const hidden = s.sidebar.mode === 'hidden'
@@ -1266,6 +1306,8 @@ almac.onState(s => {
   document.documentElement.style.setProperty('--accent', s.accent || profile.color)
   $('#actions').setAttribute('partition', 'persist:' + profile.id)
   if (document.activeElement !== url) url.value = s.url
+  if (document.documentElement.dataset.skin !== s.skin) document.documentElement.dataset.skin = s.skin
+  renderLoading(s.loading)
   if ($('#themeBtn').dataset.theme !== s.theme) { $('#themeBtn').dataset.theme = s.theme; $('#themeBtn').replaceChildren(iconEl(s.theme)) }
   document.body.classList.toggle('split', !!s.split)
   if (s.split) {
@@ -1280,9 +1322,10 @@ almac.onState(s => {
   // profil aktif selalu terlihat di header (privat sudah punya badge PRIVATE sendiri)
   const pb = $('#profBadge')
   pb.hidden = isPrivate
-  if (pb.textContent !== profile.name) pb.textContent = profile.name
+  const pbText = profile.name + (profile.tempAfter ? ' · TEMP' : '')
+  if (pb.textContent !== pbText) pb.textContent = pbText
   pb.style.setProperty('--c', profile.color)
-  pb.title = `Profile: ${profile.name} — click to switch`
+  pb.title = `Profile: ${profile.name}${profile.tempAfter ? ` (temporary: unused tabs close after ${profile.tempAfter} min)` : ''} — click to switch`
   $('#privNote').hidden = !isPrivate
   $('#starBtn').hidden = isPrivate
   $('#zoomBtn').hidden = s.zoom === 100
@@ -1414,13 +1457,14 @@ const seen = new Set()
 // tab dipin: ubin favicon di atas daftar tab
 function pinnedTile(t) {
   const tile = el('button', {
-    type: 'button', className: 'pin-tile' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : ''), title: t.title + '\n' + (t.url || ''),
+    type: 'button', className: 'pin-tile' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (t.loading ? ' loading' : ''), title: t.title + '\n' + (t.url || ''),
     onclick: () => almac.cmd('select', t.id),
     oncontextmenu: e => {
       e.preventDefault()
       ctxMenu(e.clientX, e.clientY, [
         { icon: 'pin', label: 'Unpin tab', onClick: () => almac.cmd('pinTab', t.id) },
         { icon: 'retry', label: 'Back to pinned page', disabled: t.atPin, onClick: () => almac.cmd('pinReset', t.id) },
+        { icon: 'edit', label: 'Edit pinned tab…', onClick: () => editPinned(t) },
         { icon: 'copy', label: 'Copy URL', onClick: () => almac.cmd('copyUrl', t.id) },
         '-',
         { icon: 'x', label: 'Close pinned tab', danger: true, onClick: () => almac.cmd('closePinned', t.id) },
@@ -1480,7 +1524,7 @@ function renderTabs(tabs, groups = {}) {
       // seret tab ke Almi untuk menutupnya (dia memakannya)
       ondragstart: e => { e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; almac.cmd('petFeed', t.id) },
       ondragend: () => almac.cmd('petFeedEnd'),
-      className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (g ? ' in-group' : '') + (cont ? ' in-container' : '') + (seen.has(t.id) ? '' : ' new'),
+      className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (t.loading ? ' loading' : '') + (g ? ' in-group' : '') + (cont ? ' in-container' : '') + (seen.has(t.id) ? '' : ' new'),
       title: (cont ? `[${cont.name}] ` : '') + (t.sleeping ? t.url + '\n(sleeping, saving RAM)' : t.url),
       onclick: () => almac.cmd('select', t.id),
       oncontextmenu: e => {
@@ -1537,7 +1581,7 @@ document.querySelector('.nav [data-cmd=newTab]').addEventListener('contextmenu',
 })
 
 function editProfile(p) {
-  const draft = { name: p.name, color: p.color, icon: p.icon || '' }
+  const draft = { name: p.name, color: p.color, icon: p.icon || '', tempAfter: p.tempAfter || 0 }
   const preview = el('div', { className: 'icon-preview', title: 'Click to play animation' })
   const setPreview = play => {
     preview.replaceChildren(draft.icon ? wsIcon(draft.icon) : el('span', { className: 'wsi letter', textContent: (draft.name.trim()[0] || '?').toUpperCase() }))
@@ -1557,11 +1601,17 @@ function editProfile(p) {
   }), custom)
   custom.oninput = () => { draft.color = custom.value; colors.querySelectorAll('.pick').forEach(x => x.classList.remove('on')); custom.classList.add('on'); setPreview() }
   if (!WS_COLORS.includes(draft.color)) custom.classList.add('on')
+  const tempSeg = el('div', { className: 'seg' }, ...[[0, 'Off'], [5, '5 min'], [15, '15 min'], [30, '30 min'], [60, '1 hour']].map(([v, t]) => el('button', {
+    type: 'button', className: v === draft.tempAfter ? 'on ask' : '', textContent: v ? 'Close after ' + t : t,
+    onclick() { draft.tempAfter = v; tempSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
+  })))
   setPreview()
   openModal('Edit profile', [
     el('div', { className: 'preview-row' }, preview, el('label', { className: 'row' }, el('span', { textContent: 'Name' }), name)),
     el('div', { className: 'row' }, el('span', { textContent: 'Color' }), colors),
     el('div', { className: 'row' }, el('span', { textContent: 'Icon (optional, replaces the letter)' }), search, grid),
+    ...(p.ephemeral ? [] : [el('div', { className: 'row' }, el('span', { textContent: 'Temporary mode' }), tempSeg,
+      el('p', { className: 'modal-text', style: 'font-size:11px', textContent: 'Tabs you stop using close by themselves, no history is kept and tabs are not restored after a restart (logins stay). Pinned tabs, meetings and music are never closed.' }))]),
   ], [
     { label: 'Cancel' },
     { label: 'Save', primary: true, onClick: () => almac.cmd('profileUpdate', { id: p.id, ...draft }) },
@@ -1583,7 +1633,7 @@ function openSettings(initialTab = 'general') {
       type: 'button', className: v === s.newTabPage ? 'on ask' : '', textContent: t,
       onclick() { almac.cmd('setting', { key: 'newTabPage', value: v }); ntp.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
     })))
-    const sleepSeg = el('div', { className: 'seg' }, ...[[5, '5 min'], [10, '10 min'], [30, '30 min'], [0, 'Never']].map(([v, t]) => el('button', {
+    const sleepSeg = el('div', { className: 'seg' }, ...[[5, '5 min'], [10, '10 min'], [30, '30 min'], [60, '1 hour'], [0, 'Never']].map(([v, t]) => el('button', {
       type: 'button', className: v === s.sleepAfter ? 'on ask' : '', textContent: t,
       onclick() { almac.cmd('setting', { key: 'sleepAfter', value: v }); sleepSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
     })))
@@ -1592,7 +1642,10 @@ function openSettings(initialTab = 'general') {
     return [
       el('div', { className: 'row' }, el('span', { textContent: 'Search engine' }), engines),
       el('div', { className: 'row' }, el('span', { textContent: 'New tab opens' }), ntp),
-      el('div', { className: 'row' }, el('span', { textContent: 'Memory saver: sleep tabs after' }), sleepSeg),
+      el('div', { className: 'row' }, el('span', { textContent: 'Theme' }), skinPicker(s.skin),
+        el('p', { className: 'modal-text', style: 'font-size:11px', textContent: 'Pixel themes change Almac itself. The sun/moon button still switches light/dark for websites (and for Classic).' })),
+      el('div', { className: 'row' }, el('span', { textContent: 'Memory saver: sleep tabs after' }), sleepSeg,
+        el('p', { className: 'modal-text', style: 'font-size:11px', textContent: 'Smart: mail, chat and docs stay awake 6× longer, pinned tabs and tabs with notifications 3×, light tabs 2×. Heavy tabs (700 MB+) sleep sooner. Meetings, music and tabs with unsent typing never sleep.' })),
       el('label', { className: 'check' }, bar, el('span', { textContent: 'Show bookmark bar (⌘⇧B)' })),
       (() => { // unduhan: seperti Chrome
         const seg = el('div', { className: 'seg' }, ...[['auto', 'Save to folder'], ['last', 'Last used folder'], ['ask', 'Ask every time']].map(([v, t]) => el('button', {
@@ -1942,7 +1995,8 @@ const PALETTE_CMDS = [
   ['Back up data', 'archive', () => almac.cmd('backup')],
   ['Restore backup', 'upload', () => almac.cmd('restore')],
   ['Toggle bookmark bar', 'bookmark', () => almac.cmd('bookmarkBarToggle'), '⌘⇧B'],
-  ['Change theme', 'dark', () => almac.cmd('theme')],
+  ['Change light / dark mode', 'dark', () => almac.cmd('theme')],
+  ['Pixel themes (horror, pastel, gaming…)', 'palette', () => setTimeout(() => openSettings('general'), 80)],
   ['Radio widget', 'radio', () => almac.cmd('music'), '⌘⇧M'],
   ['Passwords', 'key', () => setTimeout(openPasswords, 80), '⌘⇧P'],
   ['Lock passwords', 'lock', () => almac.cmd('pwLock')],

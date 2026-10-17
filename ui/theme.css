@@ -815,3 +815,55 @@ body.win.no-bar { --bar-space: var(--bar-h); } /* strip atas tetap ada (sama den
 .whats-new code, .whats-new pre { font: 12px ui-monospace, Menlo, monospace; background: var(--glass-strong); border-radius: 4px; padding: 1px 4px; }
 .whats-new pre { padding: 6px 8px; white-space: pre-wrap; }
 .whats-new.upd-notes { white-space: normal; font: inherit; font-size: 13px; }
+
+/* screenshot halaman & thumbnail share screen: foto halaman berisi teks, jangan dipixelkan (teks jadi bergerigi/aneh) */
+.snaps img, .screen-card img { image-rendering: auto; }
+.screen-card { align-items: stretch; justify-content: flex-start; }
+.screen-card > span { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.screen-card .screen-label { display: block; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.4; }
+
+/* ---------- progres memuat halaman ---------- */
+#loadbar {
+  position: fixed; z-index: 7; top: calc(var(--gap) + var(--bar-space) - 4px); height: 3px;
+  left: calc(var(--side-space) + var(--gap)); right: var(--gap); pointer-events: none;
+}
+#loadbar[hidden] { display: none; }
+#loadbar i, .search .url-progress {
+  display: block; height: 100%; width: 0; background: var(--accent);
+  background-image: repeating-linear-gradient(90deg, transparent 0 6px, rgba(255, 255, 255, .35) 6px 9px); /* garis pixel bergerak = masih hidup */
+  animation: loadMarch .6s steps(3) infinite; transition: width .35s var(--ease);
+}
+.search { position: relative; overflow: hidden; }
+.search .url-progress { position: absolute; left: 0; bottom: 0; height: 3px; width: var(--progress, 0); opacity: 0; transition: width .35s var(--ease), opacity .3s; }
+.search.loading .url-progress { opacity: 1; }
+@keyframes loadMarch { to { background-position: 9px 0; } }
+.tab.loading .fav, .pin-tile.loading { animation: favLoad 1s steps(2) infinite; }
+@keyframes favLoad { 50% { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); } }
+@media (prefers-reduced-motion: reduce) { #loadbar i, .search .url-progress, .tab.loading .fav, .pin-tile.loading { animation: none; } }
+
+/* ---------- tema pixel (Settings > General > Theme). Tanpa [data-skin] = Classic (ikut terang/gelap) ---------- */
+[data-skin="pastel"] { --bg: #ffd9ec; --grid: rgba(120, 60, 120, .08); --glow-1: rgba(186, 230, 253, .75); --glow-2: rgba(221, 214, 254, .75); --glass: rgba(255, 250, 253, .9); --glass-strong: #fff7fb; --text: #3b2a4a; --muted: #7a6488; --border: #5b4370; --shadow: #5b4370; --active: #e9d5ff; --field: #fff; }
+[data-skin="midnight"] { --bg: #0b1026; --grid: rgba(140, 160, 255, .06); --glow-1: rgba(65, 166, 246, .25); --glow-2: rgba(59, 93, 201, .3); --glass: rgba(20, 27, 58, .6); --glass-strong: rgba(28, 37, 78, .9); --text: #e6ebff; --muted: #8f9bd0; --border: #000; --shadow: #000; --active: color-mix(in srgb, var(--accent) 30%, #1a2350); --field: rgba(5, 8, 20, .7); }
+[data-skin="horror"] { --bg: #0d0505; --grid: rgba(255, 40, 40, .05); --glow-1: rgba(150, 0, 0, .35); --glow-2: rgba(60, 0, 30, .45); --glass: rgba(28, 10, 10, .7); --glass-strong: rgba(40, 12, 12, .92); --text: #f2dede; --muted: #b07b7b; --border: #000; --shadow: #6b0000; --active: rgba(130, 0, 0, .5); --field: rgba(10, 0, 0, .75); }
+[data-skin="gaming"] { --bg: #090014; --grid: rgba(0, 255, 240, .07); --glow-1: rgba(0, 255, 240, .22); --glow-2: rgba(255, 0, 200, .25); --glass: rgba(18, 6, 36, .65); --glass-strong: rgba(30, 10, 58, .9); --text: #f0f6ff; --muted: #a58fd8; --border: #00e5ff; --shadow: #ff00c8; --active: rgba(0, 229, 255, .18); --field: rgba(5, 0, 15, .75); }
+[data-skin="gameboy"] { --bg: #8bac0f; --grid: rgba(15, 56, 15, .12); --glow-1: rgba(155, 188, 15, .7); --glow-2: rgba(48, 98, 48, .25); --glass: #9bbc0f; --glass-strong: #a9c822; --text: #0f380f; --muted: #306230; --border: #0f380f; --shadow: #0f380f; --active: #c8dc5c; --field: #c4d66e; }
+[data-skin="terminal"] { --bg: #020a02; --grid: rgba(51, 255, 102, .06); --glow-1: rgba(51, 255, 102, .15); --glow-2: rgba(0, 120, 40, .2); --glass: rgba(4, 20, 6, .75); --glass-strong: rgba(6, 28, 8, .92); --text: #7dff9a; --muted: #3fae5a; --border: #1f7a35; --shadow: #000; --active: rgba(51, 255, 102, .15); --field: rgba(0, 8, 0, .8); --font-ui: ui-monospace, Menlo, monospace; }
+[data-skin="synthwave"] { --bg: #1a0b2e; --grid: rgba(255, 113, 206, .08); --glow-1: rgba(255, 159, 67, .3); --glow-2: rgba(255, 0, 128, .3); --glass: rgba(38, 16, 64, .62); --glass-strong: rgba(52, 22, 86, .9); --text: #fff0fb; --muted: #c79bd8; --border: #000; --shadow: #ff2a6d; --active: rgba(255, 113, 206, .22); --field: rgba(12, 4, 24, .75); }
+/* sentuhan khusus: garis scan CRT (gaming, terminal, game boy), vinyet & teks berdarah (horror) */
+:root:is([data-skin="gaming"], [data-skin="terminal"], [data-skin="gameboy"]) body::after,
+:root[data-skin="horror"] body::after { content: ''; position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+:root:is([data-skin="gaming"], [data-skin="terminal"], [data-skin="gameboy"]) body::after { background: repeating-linear-gradient(transparent 0 2px, rgba(0, 0, 0, .12) 2px 3px); }
+:root[data-skin="horror"] body::after { background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, .65)); }
+:root[data-skin="horror"] .pixel, :root[data-skin="horror"] .logo span { color: #ff4d4d; text-shadow: 0 2px 0 #5c0000, 0 0 8px rgba(255, 0, 0, .35); }
+:root[data-skin="gaming"] .pixel, :root[data-skin="synthwave"] .logo span { text-shadow: 0 0 6px var(--border), 0 0 2px var(--shadow); }
+:root[data-skin="terminal"] .logo span { text-shadow: 0 0 6px #33ff66; }
+
+/* pemilih tema: tiap kartu memakai token temanya sendiri */
+.skin-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.skin-card { height: auto; flex-direction: column; align-items: stretch; gap: 6px; padding: 6px; background: var(--bg); color: var(--text); border-color: var(--border); box-shadow: 2px 2px 0 var(--shadow); font-size: 10px; }
+.skin-card.on { outline: 3px solid var(--accent); outline-offset: 2px; }
+.skin-prev { display: grid; grid-template-columns: 1fr 2fr; grid-template-rows: 1fr 1fr; gap: 4px; height: 38px; }
+.skin-prev i { background: var(--glass-strong); border: var(--bw) solid var(--border); border-radius: 4px; box-shadow: 2px 2px 0 var(--shadow); }
+.skin-prev i:first-child { grid-row: span 2; background: var(--glass); }
+.skin-prev i:last-child { background: var(--active); }
+.skin-card[data-skin="classic"] { --bg: #7eebd3; --glass: rgba(255, 252, 240, .92); --glass-strong: #fffdf3; --text: #111; --border: #111; --shadow: #111; --active: #f6ec9f; }
