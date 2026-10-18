@@ -14,7 +14,9 @@ const { createUpdater } = require('./updater')
 
 app.setName('Almac Browser')
 const MAC = process.platform === 'darwin' // Windows/Linux: bingkai jendela, shortcut & path import berbeda (satu codebase)
-const QUICK_KEY = MAC ? 'Alt+Space' : 'Alt+Shift+Space' // Windows: Alt+Space = menu jendela sistem
+// Windows: Alt+Space biasanya menu jendela sistem, tapi hotkey global menang (seperti PowerToys Run). Sudah dipakai app lain -> cadangan.
+const QUICK_KEYS = MAC ? ['Alt+Space'] : ['Alt+Space', 'Alt+Shift+Space']
+let QUICK_KEY = QUICK_KEYS[0]
 app.setAboutPanelOptions({ applicationName: 'Almac Browser', applicationVersion: app.getVersion(), iconPath: path.join(__dirname, 'build', 'icon.png') })
 if (process.env.ALMAC_TEST_DATA) app.setPath('userData', process.env.ALMAC_TEST_DATA) // tes: folder data terpisah
 // Satu instance saja: dua instance di folder data yang sama bisa merusak database (cookies, service worker)
@@ -494,8 +496,8 @@ function flush() {
     activeWs: activeWs(),
     accent: profileOf(state.activeProfile).workspaces.find(w => w.id === activeWs())?.color || profileOf(state.activeProfile).color,
     tabs: state.tabs.filter(t => t.profileId === state.activeProfile && t.wsId === activeWs()).sort((a, b) => !!b.pinned - !!a.pinned).map(t => ({
-      id: t.id, title: t.title || t.url || 'New tab', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view, active: t === active,
-      pinned: !!t.pinned, atPin: !t.pinned || t.url === t.pinUrl, pinUrl: t.pinUrl || '', loading: !!t.loadStart,
+      id: t.id, title: t.title || t.url || 'New tab', url: t.url, split: !!t.group, favicon: t.favicon, sleeping: !t.view && !!t.url && !isInternal(t.url), active: t === active, // tab kosong & almac:// memang tanpa webContents
+      pinned: !!t.pinned, awake: !!t.awake, atPin: !t.pinned || t.url === t.pinUrl, pinUrl: t.pinUrl || '', loading: !!t.loadStart,
       count: tabCount(t), capturing: !!t.capturing?.size, audible: !!t.view?.webContents.isCurrentlyAudible(), muted: !!t.view?.webContents.isAudioMuted(), tg: t.tg || null,
       code: t.resp?.badge || '', codeTitle: t.resp ? t.resp.chain.map(h => `${h.code} ${h.url}`).join('\n') : '',
       container: isTemp(t.container) ? { id: t.container, name: 'Disposable', color: '#ff6b7a', temp: true } : containerOf(t) || null,
@@ -514,6 +516,10 @@ function flush() {
     split: (() => { const v = visibleTabs(); return v.length === 2 ? { ratio: state.splitRatio[v[0].group] ?? 0.5, activeSide: v.indexOf(activeTab()) } : null })(),
     zoom: Math.round((state.zoom[hostOf(active?.url)] || 1) * 100),
     downloadsVersion, downloadsActive: downloads.filter(d => d.state === 'progressing').length,
+    dlProgress: (() => { // gabungan unduhan yang berjalan: 0..1, -1 = ukuran belum diketahui
+      const live = downloads.filter(d => d.state === 'progressing'), total = live.reduce((a, d) => a + (d.total || 0), 0)
+      return !live.length ? 0 : live.some(d => !d.total) || !total ? -1 : live.reduce((a, d) => a + d.received, 0) / total
+    })(),
     searchEngine: state.searchEngine, engineName: engine().name, newTabPage: state.newTabPage, sleepAfter: state.sleepAfter,
     engines: Object.entries(ENGINES).map(([id, e]) => ({ id, name: e.name })),
     bookmarksVersion: bookmarksVersion + '|' + state.activeProfile,
@@ -534,7 +540,7 @@ function flush() {
   if (petWin && petState !== petSent) { petSent = petState; petWin.webContents.send('pet-state', JSON.parse(petState)) }
   // profil privat tidak pernah ditulis ke disk; tab profil sementara tidak dipulihkan setelah restart
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
-  const tabs = state.tabs.filter(t => !priv.has(t.profileId) && !isTemp(t.container) && !profileOf(t.profileId)?.tempAfter).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container }))
+  const tabs = state.tabs.filter(t => !priv.has(t.profileId) && !isTemp(t.container) && !profileOf(t.profileId)?.tempAfter).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container, awake }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container, awake }))
   for (const gid in state.tabGroups) if (!state.tabs.some(t => t.tg === gid)) delete state.tabGroups[gid] // grup tanpa tab dibuang
   const profiles = state.profiles.filter(p => !p.ephemeral)
   const sitePerms = Object.fromEntries(Object.entries(state.sitePerms).filter(([id]) => !priv.has(id)))
@@ -787,7 +793,7 @@ function activeTab() {
 const pageView = ses => new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, spellcheck: true, javascript: !state.blockJavaScript } })
 // view: halaman yang sudah termuat (Glance dijadikan tab) -> tidak dimuat ulang
 function wake(t, view) {
-  if (!t.url) return // tab baru kosong: halaman Almac di UI, belum ada webContents
+  if (!t.url || isInternal(t.url)) return // tab baru kosong & halaman almac://: digambar UI, tanpa webContents
   const c = tabCtx(t)
   t.view = view || pageView(c.ses)
   t.view.setBorderRadius(10)
@@ -911,9 +917,9 @@ function dropTemp(profileId, container) {
   c.ses.clearData().catch(() => {})
 }
 
-// tab sibuk = jangan ditidurkan otomatis: meeting (kamera/mikrofon aktif), share layar, media diputar (walau di-mute),
+// tab sibuk = jangan ditidurkan otomatis: dipilih user "selalu aktif" (awake), meeting (kamera/mikrofon aktif), share layar, media diputar (walau di-mute),
 // bersuara dalam 5 menit terakhir (jeda antar lagu / bagian sunyi), atau tab musik terakhir (widget radio)
-const busy = t => !!(t.sharing || t.capturing?.size || t.playing || t.view?.webContents.isCurrentlyAudible() || Date.now() - (t.lastAudible || 0) < 5 * 60000 || t === musicTab)
+const busy = t => !!(t.awake || t.sharing || t.capturing?.size || t.playing || t.view?.webContents.isCurrentlyAudible() || Date.now() - (t.lastAudible || 0) < 5 * 60000 || t === musicTab)
 
 function sleep(t) {
   if (!t.view) return
@@ -1228,8 +1234,22 @@ const READER_CSS = `html[data-almac-reader] body { all: initial; display: block;
 #almac-reader pre, #almac-reader code { font: 14px/1.5 ui-monospace, Menlo, monospace; background: #ece6d8; border-radius: 4px; padding: 2px 4px; white-space: pre-wrap; }
 @media (prefers-color-scheme: dark) { html[data-almac-reader] body { background: #1c1c1e; color: #e6e6e6; } #almac-reader a { color: #8ab4f8; } #almac-reader pre, #almac-reader code { background: #2c2c2e; } }`
 
-// halaman internal ala Chrome (chrome://settings dst.) -> panel Almac yang setara
+// halaman internal ala Chrome (chrome://settings dst.). TAB_PAGES = halaman penuh almac://<nama>/<bagian> di area halaman
+// (digambar UI, tanpa webContents); sisanya membuka dialog Almac yang setara
 const INTERNAL_PAGES = ['settings', 'history', 'bookmarks', 'downloads', 'extensions', 'passwords', 'newtab', 'version', 'about']
+const TAB_PAGES = { downloads: 'Downloads', history: 'History', bookmarks: 'Bookmarks', extensions: 'Extensions', settings: 'Settings' }
+const isInternal = url => /^almac:\/\//i.test(url || '')
+// here = di tab aktif (diketik di kolom alamat); selain itu pakai tab halaman itu yang sudah ada di workspace, atau tab baru
+function openPage(page, here) {
+  const [name, sub = ''] = String(page).split('/')
+  if (!TAB_PAGES[name]) return
+  const url = `almac://${name}/${sub}`
+  const t = here ? activeTab() : wsTabs().find(t => t.url?.startsWith(`almac://${name}/`))
+  if (!t) return Object.assign(newTab(url), { title: TAB_PAGES[name] })
+  if (t.view) sleep(t) // halaman web di tab ini ditinggal
+  Object.assign(t, { url, title: TAB_PAGES[name], favicon: undefined, loadError: null })
+  selectTab(t)
+}
 
 function toUrl(input) {
   input = input.trim()
@@ -1262,13 +1282,16 @@ const devtools = (panelJs) => {
 
 const commands = {
   navigate: input => {
-    const m = /^(?:chrome|almac|about):\/*([a-z-]+)\/?$/i.exec(input.trim())
+    const m = /^(?:chrome|almac|about):\/*([a-z-]+)(?:\/([a-z-]*))?\/?$/i.exec(input.trim())
     const page = m?.[1].toLowerCase()
     if (!INTERNAL_PAGES.includes(page)) return goTo(toUrl(input))
     if (page === 'newtab') return commands.newTab()
+    if (TAB_PAGES[page]) return openPage(page + '/' + (m[2] || '').toLowerCase(), true)
     win?.webContents.send('chrome-page', page)
   },
   newTab: url => newTab(url ? toUrl(url) : undefined),
+  openPage: page => openPage(page),
+  dlOpenFolder: () => shell.openPath(state.dl.dir && fs.existsSync(state.dl.dir) ? state.dl.dir : app.getPath('downloads')),
   select: id => { const t = state.tabs.find(t => t.id === id); if (t) selectTab(t) },
   close: id => { const t = state.tabs.find(t => t.id === id); if (t) closeTab(t) },
   back: () => activeTab()?.view?.webContents.navigationHistory.goBack(),
@@ -1508,7 +1531,7 @@ const commands = {
   // ---- split view ----
   splitWith: ({ id, other }) => {
     const a = state.tabs.find(t => t.id === id), b = state.tabs.find(t => t.id === other)
-    if (!a || !b || a === b) return
+    if (!a || !b || a === b || isInternal(a.url) || isInternal(b.url)) return // halaman almac:// digambar UI selebar area halaman
     unsplit(a); unsplit(b)
     if (!b.url) b.url = engine().home // tab kosong tidak punya halaman untuk ditampilkan
     if (!a.url) a.url = engine().home
@@ -1559,9 +1582,12 @@ const commands = {
     unsplit(t)
     t.lastActive = 0
     selectTab(next)
-    sleep(t); render(true)
+    if (!t.awake) sleep(t)
+    render(true)
     win?.webContents.send('toast', 'Pinned tab kept. Right-click it to unpin or close')
   },
+  // tab selalu aktif: tidak pernah ditidurkan otomatis & tidak ditutup profil sementara (mis. dashboard, chat, monitoring)
+  awakeTab: id => { const t = state.tabs.find(t => t.id === id); if (!t) return; t.awake = !t.awake; if (t.awake && !t.view) wake(t); render(true) },
   sleepTab: id => { const t = state.tabs.find(t => t.id === id); if (t && !isShown(t)) { sleep(t); render() } },
   sleepOthers: id => { for (const t of state.tabs) if (t.id !== id && t.view && !isShown(t) && !busy(t)) sleep(t); render() },
   copyUrl: id => clipboard.writeText(state.tabs.find(t => t.id === id)?.url || ''),
@@ -1984,15 +2010,17 @@ const commands = {
   },
 
   skin: id => {
-    if (!SKINS[id]) return
+    if (!(id in SKINS)) return // classic = null, tetap sah
     state.skin = id
+    applyTheme()
     if (!MAC) win?.setTitleBarOverlay?.(overlayColors())
     render(true)
   },
   theme: () => {
+    if (SKINS[state.skin]) return toast('This theme sets light/dark itself. Switch to Classic in Settings › Theme to use light/dark')
     const order = ['system', 'light', 'dark']
     state.theme = order[(order.indexOf(state.theme) + 1) % order.length]
-    nativeTheme.themeSource = state.theme // UI & halaman web ikut prefers-color-scheme
+    applyTheme()
     render()
   },
 }
@@ -2569,6 +2597,7 @@ function toggleSpotlight() {
       skipTaskbar: true, alwaysOnTop: true, transparent: true, hasShadow: false, backgroundColor: '#00000000', // kotak & bayangan pixel digambar di HTML
       webPreferences: { preload: path.join(__dirname, 'spotlight-preload.js'), sandbox: true, contextIsolation: true },
     })
+    spot.removeMenu() // Windows: tanpa ini Alt yang dilepas setelah Alt+Space memindah fokus keyboard ke menu tersembunyi -> ketikan hilang
     spot.webContents.on('will-navigate', e => e.preventDefault())
     spot.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     spot.on('blur', () => spot?.hide())
@@ -2579,10 +2608,11 @@ function toggleSpotlight() {
     if (!spot) return
     const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
     spot.setBounds({ x: Math.round(a.x + (a.width - SPOT_W) / 2), y: Math.round(a.y + a.height * 0.22), width: SPOT_W, height: spot.getBounds().height })
-    spot.webContents.send('spot-open')
     spot.show()
     app.focus({ steal: true }) // dari app lain: Almac harus aktif supaya kolom ketik dapat fokus
     spot.focus()
+    spot.webContents.focus() // Windows: fokus jendela saja belum memberi fokus keyboard ke halamannya
+    spot.webContents.send('spot-open', keyText(QUICK_KEY)) // setelah tampil: kolom ketik baru bisa difokus di jendela yang terlihat
   })
 }
 ipcMain.handle('spot', async (e, type, arg) => {
@@ -2600,7 +2630,8 @@ ipcMain.handle('spot', async (e, type, arg) => {
   win.show(); win.focus()
   if (arg?.tabId) return commands.select(arg.tabId)
   const text = String(arg?.text || '').trim()
-  if (text) /^(chrome|almac|about):/i.test(text) ? commands.navigate(text) : commands.newTab(text)
+  // ⇧↩ = buka di tab yang sedang aktif (tab dipin tetap terkunci ke situsnya)
+  if (text) arg.here || /^(chrome|almac|about):/i.test(text) ? commands.navigate(text) : commands.newTab(text)
   return null
 })
 
@@ -2614,7 +2645,7 @@ function buildMenu() {
         { label: 'Check for Updates…', click: () => { updater.check({ manual: true }); send('open-update')() } },
         { label: 'What\'s New…', click: showWhatsNew },
         { type: 'separator' },
-        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('open-settings') },
+        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => openPage('settings') },
         ...(MAC ? [{ type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }] : []), { type: 'separator' }, { role: 'quit' },
       ],
     },
@@ -2683,15 +2714,16 @@ function buildMenu() {
         { label: 'Back', accelerator: 'CmdOrCtrl+[', click: commands.back },
         { label: 'Forward', accelerator: 'CmdOrCtrl+]', click: commands.forward },
         { type: 'separator' },
-        { label: 'Show Full History', accelerator: 'CmdOrCtrl+Y', click: send('toggle-history') },
-        { label: 'Downloads', accelerator: 'CmdOrCtrl+Shift+J', click: send('toggle-downloads') },
-        { label: 'Clear Browsing Data…', accelerator: 'CmdOrCtrl+Shift+Backspace', click: () => { win.webContents.focus(); win.webContents.send('open-settings', 'privacy') } },
+        { label: 'Show Full History', accelerator: 'CmdOrCtrl+Y', click: () => openPage('history') },
+        { label: 'Downloads', accelerator: 'CmdOrCtrl+J', click: () => openPage('downloads') }, // seperti Chrome
+        { label: 'Downloads', accelerator: 'CmdOrCtrl+Shift+J', visible: false, click: () => openPage('downloads') }, // shortcut lama Almac
+        { label: 'Clear Browsing Data…', accelerator: 'CmdOrCtrl+Shift+Backspace', click: () => openPage('settings/privacy') },
       ],
     },
     {
       label: 'Bookmarks',
       submenu: [
-        { label: 'Bookmark Manager', accelerator: 'CmdOrCtrl+Alt+B', click: send('toggle-bookmarks') },
+        { label: 'Bookmark Manager', accelerator: 'CmdOrCtrl+Alt+B', click: () => openPage('bookmarks') },
         { label: 'Bookmark This Tab…', accelerator: 'CmdOrCtrl+D', click: send('bookmark-current') },
       ],
     },
@@ -2734,8 +2766,10 @@ function buildMenu() {
   ]))
 }
 
-// tema pixel (ui/theme.css [data-skin]): [latar, teks] untuk tombol jendela Windows & latar jendela saat dibuka; classic ikut terang/gelap
-const SKINS = { classic: null, pastel: ['#ffd9ec', '#3b2a4a'], midnight: ['#0b1026', '#e6ebff'], horror: ['#0d0505', '#f2dede'], gaming: ['#090014', '#f0f6ff'], gameboy: ['#8bac0f', '#0f380f'], terminal: ['#020a02', '#7dff9a'], synthwave: ['#1a0b2e', '#fff0fb'] }
+// tema pixel (ui/theme.css [data-skin]): [latar, teks, mode] -> tombol jendela Windows, latar jendela saat dibuka, dan terang/gelap
+// halaman web. Classic (null) ikut tombol terang/gelap; tema lain menentukan modenya sendiri (tombolnya nonaktif)
+const SKINS = { classic: null, pastel: ['#ffd9ec', '#3b2a4a', 'light'], midnight: ['#0b1026', '#e6ebff', 'dark'], horror: ['#0d0505', '#f2dede', 'dark'], gaming: ['#090014', '#f0f6ff', 'dark'], gameboy: ['#8bac0f', '#0f380f', 'light'], terminal: ['#020a02', '#7dff9a', 'dark'], synthwave: ['#1a0b2e', '#fff0fb', 'dark'] }
+const applyTheme = () => { nativeTheme.themeSource = SKINS[state.skin]?.[2] || state.theme } // UI & halaman web ikut prefers-color-scheme
 const skinBg = () => SKINS[state.skin]?.[0] || (nativeTheme.shouldUseDarkColors ? '#141623' : '#7eebd3')
 const overlayColors = () => ({ color: skinBg(), symbolColor: SKINS[state.skin]?.[1] || (nativeTheme.shouldUseDarkColors ? '#f1f2f6' : '#111111'), height: GAP + BAR_H })
 nativeTheme.on('updated', () => { if (!MAC) win?.setTitleBarOverlay?.(overlayColors()) })
@@ -2745,7 +2779,7 @@ app.whenReady().then(async () => {
   load()
   applyDns()
   setInterval(watchVpn, 5000) // GlobalProtect dll. tersambung/putus -> DoH dijeda/aktif lagi
-  nativeTheme.themeSource = state.theme
+  applyTheme()
   try {
     // Daftar filter yang sama dipakai Ghostery/uBlock (EasyList, EasyPrivacy, dll), di-cache ke disk
     blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, {
@@ -2829,7 +2863,9 @@ app.whenReady().then(async () => {
   commands.switchProfile(state.activeProfile)
   uiReady = true
   pendingOpen.splice(0).forEach(openFromOutside) // link yang membuka Almac
-  if (!globalShortcut.register(QUICK_KEY, toggleSpotlight)) toast(keyText(QUICK_KEY) + ' is taken by another app, so Quick Search is in the File menu only')
+  const quick = QUICK_KEYS.find(k => globalShortcut.register(k, toggleSpotlight))
+  if (!quick) toast(keyText(QUICK_KEY) + ' is taken by another app, so Quick Search is in the File menu only')
+  else if (quick !== QUICK_KEY) { QUICK_KEY = quick; buildMenu() } // menu menampilkan shortcut yang benar-benar terdaftar
   if (state.music?.on) toggleMusic()
   if (state.pet.out) petOut(true)
   // baru di-update ke versi ini -> tampilkan "What's new" sekali

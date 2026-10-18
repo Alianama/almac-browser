@@ -65,7 +65,7 @@
     <div class="sp-title"><i></i><i></i><i></i><span class="sp-stripes"></span><span>QUICK SEARCH</span><span class="sp-stripes"></span></div>
     <div class="sp-top"><img src="logo.svg" alt=""><div class="sp-field"><input id="q" placeholder="Search or enter a URL" autocomplete="off" spellcheck="false" autofocus></div><span class="sp-chip" id="engine">GOOGLE</span></div>
     <div id="spList"></div>
-    <div class="sp-foot"><span>ALMAC ⌥SPACE</span><span class="sp-grow"></span><span><kbd>↩</kbd>open</span><span><kbd>↑↓</kbd>select</span><span><kbd>esc</kbd>close</span></div>
+    <div class="sp-foot"><span>ALMAC ⌥SPACE</span><span class="sp-grow"></span><span><kbd>↩</kbd>open</span><span><kbd>⇧↩</kbd>this tab</span><span><kbd>↑↓</kbd>select</span><span><kbd>esc</kbd>close</span></div>
   </div></div></div>
   <script src="icons.js"></script>
   <script>
@@ -83,7 +83,7 @@
         r.className = 'sp-row' + (i === sel ? ' sp-sel' : '')
         r.append(icon(it.icon), text('b', it.text), text('small', it.sub), Object.assign(text('span', '↩ ENTER'), { className: 'sp-go' }))
         r.onmousemove = () => { if (sel !== i) { sel = i; draw() } }
-        r.onmousedown = e => { e.preventDefault(); spot.go(it.go) }
+        r.onmousedown = e => { e.preventDefault(); open(it.go, e.shiftKey) }
         return r
       }))
       spot.size($('#spWrap').offsetHeight + 8)
@@ -104,17 +104,19 @@
       sel = 0
       draw()
     }
+    // ⇧ = buka di tab yang sedang aktif (bukan tab baru); "pindah ke tab" tetap pindah tab
+    const open = (go, here) => spot.go(here && go.text ? { ...go, here: true } : go)
     q.addEventListener('input', update)
     q.addEventListener('keydown', e => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault()
         if (items.length) { sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; draw() }
       }
-      if (e.key === 'Enter') { e.preventDefault(); const v = q.value.trim(); if (v) spot.go(items[sel]?.go || { text: v }) }
+      if (e.key === 'Enter') { e.preventDefault(); const v = q.value.trim(); if (v) open(items[sel]?.go || { text: v }, e.shiftKey) }
       if (e.key === 'Escape') spot.close()
     })
-    spot.onOpen(() => { q.value = ''; items = []; draw(); q.focus() })
-    if (spot.platform !== 'darwin') $('.sp-foot span').textContent = 'ALMAC ALT+SHIFT+SPACE'
+    spot.onOpen((_, key) => { if (key) $('.sp-foot span').textContent = 'ALMAC ' + key.toUpperCase(); q.value = ''; items = []; draw(); q.focus() })
+    if (spot.platform !== 'darwin') { $('.sp-foot span').textContent = 'ALMAC ALT+SPACE'; document.querySelectorAll('.sp-foot kbd').forEach(k => { k.textContent = k.textContent.replace('⇧↩', 'SHIFT+↩') }) }
     draw()
   </script>
 </body>

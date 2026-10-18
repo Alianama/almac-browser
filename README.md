@@ -4,7 +4,7 @@
   <p><strong>A pixel-aesthetic, privacy-focused browser built on Electron + Chromium</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-1.3.9-brightgreen?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-1.3.10-brightgreen?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square&logo=electron" alt="Electron">
@@ -25,7 +25,7 @@
 ### 🎨 Pixel-Aesthetic Design
 - Unique **pixel + glassmorphism** UI theme with animated Lucide icons
 - Full **light / dark / system** theme support
-- **8 pixel themes** — Classic, Pastel, Midnight, Horror, Gaming, Game Boy, Terminal, Synthwave
+- **8 pixel themes** — Classic, Pastel, Midnight, Horror, Gaming, Game Boy, Terminal, Synthwave (each sets light/dark for websites too)
 - Animated sidebar with smooth workspace transitions
 - Customizable accent color per profile and workspace
 
@@ -82,6 +82,7 @@
 - Swipe between workspaces with **2-finger trackpad gesture** or **3-finger swipe**
 - **Pinned tabs stay on their site** — links elsewhere open in a new tab; change it with Edit pinned tab
 - **Temporary profiles** — unused tabs close by themselves, no history kept
+- **Always-awake tabs** — mark a tab so it never sleeps or auto-closes
 
 ### 🌐 Extensions
 - Full **Chrome Extension (MV2 & MV3)** support via `electron-chrome-extensions`
@@ -92,14 +93,15 @@
 
 ### 📚 Browsing
 - **Bookmark bar** with folder support and nested dropdown menus
+- **Full-page `almac://` pages** like `chrome://` — `almac://downloads`, `history`, `bookmarks`, `extensions`, `settings`
 - **History** with search, grouped by day
-- **Downloads manager** with pause / resume / cancel
+- **Downloads manager** with pause / resume / cancel, and a pixel progress ring on the Downloads button
 - **Import** bookmarks & history from Chrome, Brave, Edge, Arc, Vivaldi
 - **Split view** — browse two pages side by side
 - **Tab groups** — named, colored, collapsible groups (right-click a tab)
 - **Glance** (like Zen / Arc Peek) — ⌥-click a link to preview it in a floating window; Esc closes, ⌘↩ opens it as a tab
 - **Boosts** (like Arc) — your own CSS & JavaScript per site (⌘⌥K), and **Zap** (⌘⌥Z) to hide any element with one click
-- **Quick Search (⌥Space)** — Spotlight-style pixel + glass search window from anywhere on your Mac: open tabs, bookmarks, history and search suggestions
+- **Quick Search (⌥Space)** — Spotlight-style pixel + glass search window from anywhere on your Mac: open tabs, bookmarks, history and search suggestions. **⇧↩** opens the result in the current tab
 - **Notification counters on tabs** — unread counts from Gmail, WhatsApp, etc. show on their tab, not on the Dock icon
 - **Tab audio** — speaker icon on tabs playing sound, click to mute
 - **Reader mode** (⌘⌥R) and **Translate page** (Google Translate)
@@ -135,7 +137,7 @@ Or open **System Settings › Privacy & Security** and click **Open Anyway**.
 
 **Windows:** download `Almac-Browser-<version>-win-x64.exe` and run it. Almac installs for your user account, with no admin rights needed. The installer is not code-signed, so SmartScreen shows "Windows protected your PC". Click **More info › Run anyway**.
 
-On Windows, shortcuts use **Ctrl** where the Mac uses **⌘**. Quick Search is **Alt+Shift+Space**, because Windows uses Alt+Space for the window menu. Switch workspaces with **Ctrl+Alt+PgUp/PgDn**. Almac can't be set as the default browser on Windows yet.
+On Windows, shortcuts use **Ctrl** where the Mac uses **⌘**. Quick Search is **Alt+Space** (or **Alt+Shift+Space** if another app, such as PowerToys Run, already uses Alt+Space). Switch workspaces with **Ctrl+Alt+PgUp/PgDn**. Almac can't be set as the default browser on Windows yet.
 
 ### Updates
 Almac updates itself on macOS (from v1.3.0) and Windows. It checks GitHub Releases on launch and every 6 hours, or use **Check for Updates…**. On Windows, the signed installer runs silently and reopens Almac.
@@ -176,7 +178,7 @@ Same as Chrome on macOS wherever possible. In the app, open **Help › Keyboard 
 | Save Page As / Print | `⌘S` / `⌘P` |
 | Bookmark Page | `⌘D` |
 | Bookmark Manager | `⌘⌥B` |
-| History / Downloads | `⌘Y` / `⌘⇧J` |
+| History / Downloads | `⌘Y` / `⌘J` |
 | Clear Browsing Data | `⌘⇧⌫` |
 | Settings | `⌘,` |
 | Toggle Bookmark Bar | `⌘⇧B` |
