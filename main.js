@@ -790,6 +790,33 @@ function activeTab() {
     .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0]
 }
 
+// popup (window.open: OAuth, konsol Proxmox/noVNC, ...) = jendela terpisah. Electron diam-diam membatalkan close
+// kalau halaman punya beforeunload (tanpa dialog) -> popup tidak bisa ditutup. Lewati, dan ⌘W menutup popup-nya.
+const popups = new Set()
+function popupWin(w) {
+  popups.add(w)
+  w.webContents.on('will-prevent-unload', e => e.preventDefault())
+  w.on('closed', () => popups.delete(w))
+}
+// status link seperti Chrome: hover link -> URL tujuan kecil di pojok kanan bawah halaman.
+// UI tidak bisa menggambar di atas halaman, jadi pakai view transparan kecil selebar teksnya.
+let linkView = null, linkReady = null
+const LINK_HTML = '<body style="margin:0;display:flex;justify-content:flex-end;font:11px Menlo,monospace"><div id=s style="background:rgba(24,24,28,.92);color:#eee;padding:4px 8px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%"></div>'
+function showLink(t, url) {
+  if (!win) return
+  if (!url || !isShown(t) || htmlFull) return linkView && win.contentView.removeChildView(linkView)
+  if (!linkView) {
+    linkView = new WebContentsView()
+    linkView.setBackgroundColor('#00000000')
+    linkReady = linkView.webContents.loadURL('data:text/html,' + encodeURIComponent(LINK_HTML))
+  }
+  const b = t.view.getBounds(), h = 22
+  const w = Math.round(Math.min(url.length * 6.7 + 20, b.width / 2)) // ponytail: lebar ditaksir dari jumlah huruf monospace
+  linkView.setBounds({ x: b.x + b.width - w - 4, y: b.y + b.height - h - 4, width: w, height: h })
+  linkReady.then(() => linkView.webContents.executeJavaScript(`s.textContent = ${JSON.stringify(url)}`)).catch(() => {})
+  win.contentView.addChildView(linkView)
+}
+
 const pageView = ses => new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, spellcheck: true, javascript: !state.blockJavaScript } })
 // view: halaman yang sudah termuat (Glance dijadikan tab) -> tidak dimuat ulang
 function wake(t, view) {
@@ -810,6 +837,8 @@ function wake(t, view) {
   const sync = visit => { if (!live()) return; t.url = wc.getURL(); t.title = wc.getTitle(); addHistory(t, visit); render() }
   // video fullscreen (YouTube, Netflix, ...): halaman menutupi seluruh jendela seperti Chrome, tanpa sidebar & bar
   // (jendelanya sendiri masuk/keluar fullscreen oleh Electron; jangan ikut memanggil setFullScreen, keluar-nya jadi macet)
+  wc.on('did-create-window', popupWin)
+  wc.on('update-target-url', (_, url) => live() && showLink(t, url))
   wc.on('enter-html-full-screen', () => { htmlFull = t; layout() })
   wc.on('leave-html-full-screen', () => { if (htmlFull === t) { htmlFull = null; layout() } })
   // tab dipin terkunci ke situsnya: link ke situs lain dibuka di tab baru (ubah lewat "Edit pinned tab")
@@ -950,6 +979,7 @@ function sleepDelay(t, mem) {
   if (mb > 700) x = Math.max(1, x / 2)
   return state.sleepAfter * 60000 * x
 }
+const STALE_TAB = 7 * 24 * 3600000
 const idleSince = t => Math.max(t.lastActive || 0, t.seenAt || 0) // seenAt: terakhir tampil di layar
 const DIRTY_JS = `[...document.querySelectorAll('textarea, input:is([type=text], [type=email], [type=url], [type=tel], [type=number], :not([type]))')].some(e => e.value && e.value !== e.defaultValue)`
 function sleepIfIdle(t) {
@@ -985,6 +1015,7 @@ function layout() {
     htmlFull.view?.webContents.executeJavaScript('document.fullscreenElement && document.exitFullscreen()', true).catch(() => {})
     htmlFull = null
   }
+  if (linkView) win.contentView.removeChildView(linkView) // pindah tab/layout: status link lama hilang
   const full = !modalOpen && htmlFull
   const tabs = full ? [full] : modalOpen || peeking || covered || glance ? [] : visibleTabs().filter(t => !t.loadError) // halaman error tampil di UI; glance: tab diganti snapshot
   for (const t of tabs) if (!t.view) wake(t) // pasangan split ikut dihidupkan
@@ -1027,6 +1058,7 @@ async function openGlance(url, profileId = state.activeProfile, container) {
   const mine = () => glance?.view === view // listener mati sendiri setelah glance ditutup / jadi tab
   for (const ev of ['page-title-updated', 'did-navigate', 'did-navigate-in-page']) wc.on(ev, () => mine() && glanceInfo())
   wc.on('dom-ready', () => { if (mine()) { applyBoost(wc); viewJson(wc) } })
+  wc.on('did-create-window', popupWin)
   wc.on('context-menu', (_, p) => mine() && pageMenu(wc, { profileId, container }, p).popup({ window: win }))
   wc.on('before-input-event', (e, i) => {
     if (!mine() || i.type !== 'keyDown') return
@@ -1107,7 +1139,7 @@ function selectTab(t) {
 const newTabUrl = () => state.newTabPage === 'engine' ? engine().home : '' // '' = halaman Almac
 function newTab(url = newTabUrl(), profileId = state.activeProfile, focus = true, container) {
   const t = { id: nextTabId++, profileId, wsId: activeWs(profileId), url, title: '', blocked: 0, lastActive: Date.now(), view: null, ...(container && { container }) }
-  state.tabs.push(t)
+  state.tabs.unshift(t) // tab terbaru di atas
   wake(t)
   focus ? selectTab(t) : render()
   return t
@@ -1921,7 +1953,7 @@ const commands = {
     const { view, profileId, container, url } = glance
     closeGlance(true)
     const t = { id: nextTabId++, profileId, wsId: activeWs(profileId), url: view.webContents.getURL() || url, title: view.webContents.getTitle(), blocked: 0, lastActive: Date.now(), view: null, ...(container && { container }) }
-    state.tabs.push(t)
+    state.tabs.unshift(t)
     wake(t, view)
     selectTab(t)
   },
@@ -2660,7 +2692,7 @@ function buildMenu() {
         { label: 'Open Location…', accelerator: 'CmdOrCtrl+L', click: send('focus-url') },
         { label: 'Quick Search', accelerator: QUICK_KEY, registerAccelerator: false, click: () => toggleSpotlight() }, // shortcut global, didaftarkan lewat globalShortcut
         { type: 'separator' },
-        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => commands.closeActive() },
+        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: (_, w) => popups.has(w) ? w.close() : commands.closeActive() },
         { label: 'Save Page As…', accelerator: 'CmdOrCtrl+S', click: () => commands.savePage() },
         { type: 'separator' },
         { label: 'Print…', accelerator: 'CmdOrCtrl+P', click: () => commands.print() },
@@ -2876,18 +2908,22 @@ app.whenReady().then(async () => {
     if (!win) return
     const now = Date.now()
     const mem = new Map(app.getAppMetrics().map(m => [m.pid, m.memory.workingSetSize / 1024])) // pid -> MB
-    const expired = []
+    const expired = [], stale = []
     for (const t of state.tabs) {
       if (isShown(t)) { t.seenAt = now; continue }
       if (busy(t)) continue
       // profil sementara: tab tidak dipakai selama tempAfter menit ditutup (tab dipin tetap)
       const temp = profileOf(t.profileId)?.tempAfter
       if (temp && !t.pinned && now - idleSince(t) > temp * 60000) { expired.push(t); continue }
+      // tab tidak dibuka lebih dari 7 hari ditutup otomatis (tab dipin, di grup, atau split tetap)
+      if (!t.pinned && !t.tg && !t.group && t.lastActive && now - idleSince(t) > STALE_TAB) { stale.push(t); continue }
       // hemat memori: tab tidak tampil & tidak bersuara ditidurkan, batasnya menyesuaikan isi tab (sleepDelay)
       if (state.sleepAfter && t.view && now - idleSince(t) > sleepDelay(t, mem)) sleepIfIdle(t)
     }
     expired.forEach(closeTab)
     if (expired.length) toast(`Temporary profile: closed ${expired.length} unused ${expired.length === 1 ? 'tab' : 'tabs'} (⌘⇧T to reopen)`)
+    stale.forEach(closeTab)
+    if (stale.length) toast(`Closed ${stale.length} ${stale.length === 1 ? 'tab' : 'tabs'} not opened for 7 days (⌘⇧T to reopen)`)
     if (vault.unlocked() && now - pwLastUse > state.pwLockAfter * 60000) pwLock()
     if (process.platform === 'darwin' && app.getBadgeCount()) app.setBadgeCount(0) // badge dari service worker (tanpa preload): Dock tetap bersih
     if (state.focus.until && !focusOn()) { state.focus.until = 0; win.webContents.send('toast', 'Focus session finished. Nice work!') }

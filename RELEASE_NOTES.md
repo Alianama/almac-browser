@@ -1,29 +1,13 @@
-## 📄 Full-page Downloads, History, Bookmarks, Extensions and Settings
-- Like `chrome://downloads`, these now open as full pages in a tab: `almac://downloads`, `almac://history`, `almac://bookmarks`, `almac://extensions` and `almac://settings`.
-- Open them with the shortcuts, the sidebar buttons or ⌘K, or type the address (`chrome://` works too). A page that is already open is reused instead of opening a second tab.
-- Settings sections have their own addresses, for example `almac://settings/privacy`.
-- In History and Bookmarks, a click opens the page in the same tab, like Chrome. ⌘-click opens it in a new tab.
+## 🪟 Popup windows close again
+- Separate windows opened by a site, like the Proxmox shell console, can be closed with the close button again. Before, a "leave this page?" check on the site silently stopped them from closing.
+- **⌘W** in a popup window closes that window, not the tab behind it.
 
-## ⬇️ Downloads button with a pixel progress ring
-- A Downloads button sits next to the extensions button at the top of the sidebar.
-- While files download, a ring of pixel squares fills up around the button. If the file size is unknown, the squares spin. With more than one download, a number shows on the button.
-- **⌘J** opens Downloads, like Chrome (Ctrl+J on Windows). ⌘⇧J still works.
+## 🔗 Link preview on hover
+- Hover a link to see where it goes, in a small label at the bottom-right of the page, like Chrome.
 
-## ☕ Always-awake tabs
-- Right-click a tab › **Keep this tab always awake**. It is never put to sleep or closed by a temporary profile. A cup icon marks it.
-
-## 🎨 Themes and light/dark
-- Each pixel theme now also sets light or dark for websites. With a theme other than Classic, the sun/moon button is turned off, so the two settings no longer overlap.
-- The Almac logo moved to the top-right corner, next to the bookmark bar.
-
-## 🔎 Quick Search
-- On Windows, Quick Search now opens with **Alt+Space**, like on the Mac. If another app already uses it, Almac falls back to Alt+Shift+Space.
-- Typing now works right away on Windows. Before, releasing Alt could move the keyboard focus away from the search box.
-- **Shift+Enter** opens the result in the current tab instead of a new one.
-
-## 🐞 Fixes
-- You can switch back to the Classic theme again.
-- Empty new tabs no longer show "zz" as if they were asleep.
+## 🧹 Tidier tabs
+- New tabs open at the top of the tab list.
+- Tabs you haven't opened for 7 days close automatically. Pinned tabs, tabs in a group and split-view tabs are kept. Press **⌘⇧T** to reopen a closed tab.
 
 ## Install (first time)
 **macOS:** download the `.dmg` (**arm64** for Apple Silicon, **x64** for Intel), open it, and drag **Almac Browser** to **Applications**.
@@ -33,7 +17,7 @@ xattr -dr com.apple.quarantine "/Applications/Almac Browser.app"
 ```
 Or open **System Settings › Privacy & Security** and click **Open Anyway**.
 
-**Windows:** download `Almac-Browser-1.3.10-win-x64.exe` and run it. It installs for your user account, with no admin rights needed.
+**Windows:** download `Almac-Browser-1.3.11-win-x64.exe` and run it. It installs for your user account, with no admin rights needed.
 The installer is not code-signed yet, so Windows SmartScreen shows "Windows protected your PC". Click **More info**, then **Run anyway**.
 
 You only need these steps after you download Almac from the internet. In-app updates don't need them.
