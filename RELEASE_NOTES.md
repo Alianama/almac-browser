@@ -1,5 +1,9 @@
-## 📺 YouTube without the ad-blocker warning
-- YouTube no longer shows "Ad blockers violate YouTube's Terms of Service". Almac removes the ads from the video data before the player loads, so videos play right away without ads.
+## 📺 YouTube ads skipped
+- YouTube now puts ads inside the video stream, so blocking them shows "Ad blockers violate YouTube's Terms of Service" or a playback error. Almac no longer blocks ads on YouTube. Instead, it mutes each ad and skips it right away.
+- If YouTube already flagged your account, the warning can still show for a while until YouTube clears the flag.
+
+## 🛡️ Ad blocker on/off
+- Turn the ad blocker off or on from **Almi's house** (the Almi button in the sidebar). The current page reloads so the change shows right away.
 
 ## Install (first time)
 **macOS:** download the `.dmg` (**arm64** for Apple Silicon, **x64** for Intel), open it, and drag **Almac Browser** to **Applications**.

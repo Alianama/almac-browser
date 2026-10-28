@@ -2554,8 +2554,10 @@ function openHouse() {
       ? 'Almi is napping at home. Let her out to walk around your pages, eat trackers, and close tabs you drop on her.'
       : 'Almi is out exploring. Drag her anywhere and she will perch there. Drop a tab from the sidebar onto her to close it.' }),
     el('p', { className: 'modal-text muted', textContent: `Today: ${lastState.blockedToday.toLocaleString('en-US')} trackers eaten · ${lastState.tabsEaten} tabs eaten in total` }),
+    el('p', { className: 'modal-text muted', textContent: `Ad blocker: ${lastState.adblock ? 'on' : 'off'} (YouTube ads are always skipped instead of blocked)` }),
   ], [
     { label: 'Close' },
+    { label: lastState.adblock ? 'Turn ad blocker off' : 'Turn ad blocker on', onClick: () => almac.cmd('setting', { key: 'adblock', value: !lastState.adblock }) },
     { label: home ? 'Let Almi out' : 'Call Almi home', primary: true, onClick: () => almac.cmd('petOut', home) },
   ])
 }

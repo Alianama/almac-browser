@@ -52,31 +52,22 @@ addEventListener('click', e => {
   ipcRenderer.send('glance', a.href)
 }, true)
 
-// YouTube anti-adblock: Ghostery menyuntik scriptlet lewat IPC (async) -> terlambat, player sudah membaca data iklan,
-// lalu request iklan diblokir dan YouTube menampilkan "Pemblokir iklan melanggar ToS". Brave/uBO membuang data iklan
-// dari respons player SEBELUM skrip halaman jalan (json-prune adPlacements/playerAds/adSlots), jadi player tak pernah
-// mencoba memutar iklan. Preload ini jalan di document-start, jadi tekniknya sama.
+// YouTube: iklan disisipkan server ke stream (SSAP/SABR), jadi tidak bisa diblokir/dibuang tanpa layar "Pemblokir iklan"
+// atau error putar. Iklan dibiarkan dimuat (Ghostery mati di youtube.com, lihat blockOn di main.js), lalu dibisukan dan
+// dilompati ke akhir + tombol Skip diklik -> bagi server iklan "sudah diputar".
 contextBridge.executeInMainWorld({
   func: () => {
     if (!/(^|\.)youtube(-nocookie)?\.com$/.test(location.hostname)) return
-    const KEYS = ['adPlacements', 'adSlots', 'playerAds', 'adBreakHeartbeatParams']
-    // sesi yang sudah ditandai: server mengirim status ERROR + layar "Pemblokir iklan..." tapi stream tetap disertakan -> pulihkan
-    const unflag = t => {
-      const ps = t.playabilityStatus
-      if (ps?.errorScreen?.enforcementMessageViewModel && t.streamingData) { ps.status = 'OK'; delete ps.errorScreen }
-      delete t.auxiliaryUi?.messageRenderers?.bkaEnforcementMessageViewModel
-    }
-    const prune = o => {
-      if (o && typeof o === 'object') for (const t of [o, o.playerResponse]) if (t && typeof t === 'object') { for (const k of KEYS) delete t[k]; unflag(t) }
-      return o
-    }
-    const parse = JSON.parse
-    JSON.parse = function (...a) { return prune(parse.apply(this, a)) }
-    const json = Response.prototype.json
-    Response.prototype.json = function () { return json.call(this).then(prune) }
-    for (const name of ['ytInitialPlayerResponse', 'ytInitialData']) {
-      let v
-      Object.defineProperty(window, name, { configurable: true, get: () => v, set: x => { v = prune(x) } })
-    }
+    let muted = null // status mute pengguna sebelum iklan
+    setInterval(() => {
+      const p = document.querySelector('#movie_player'), v = p?.querySelector('video')
+      if (!v) return
+      if (p.classList.contains('ad-showing')) {
+        if (muted === null) muted = v.muted
+        v.muted = true
+        if (isFinite(v.duration) && v.currentTime < v.duration - 0.1) v.currentTime = v.duration - 0.1
+        p.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button')?.click()
+      } else if (muted !== null) { v.muted = muted; muted = null }
+    }, 250)
   },
 })

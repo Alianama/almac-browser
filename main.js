@@ -82,7 +82,7 @@ process.on('uncaughtException', e => {
 })
 
 let win, blocker, updater
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', skin: 'classic', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, seenVersion: '', focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', skin: 'classic', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, adblock: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, seenVersion: '', focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -325,6 +325,9 @@ function load() {
 
 const uid = prefix => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 const hostOf = url => { try { return new URL(url).hostname } catch { return '' } }
+// adblock bisa dimatikan (rumah Almi). YouTube selalu tanpa Ghostery: iklannya disisipkan server ke stream (SSAP/SABR),
+// jadi memblokir/membuang data iklan = layar "Pemblokir iklan" atau error putar. Iklannya dilewati media-preload.js.
+const blockOn = wc => !!blocker && state.adblock && !/(^|\.)youtube\.com$/.test(hostOf(wc?.getURL?.()))
 const profileOf = id => state.profiles.find(p => p.id === id)
 // ikon emoji versi lama -> ikon Lucide animasi
 const EMOJI_ICON = {
@@ -509,7 +512,7 @@ function flush() {
     security: security(active),
     bookmarked: !!active && isBookmarked(active.profileId, active.url),
     blocked: active?.blocked || 0,
-    adblock: !!blocker,
+    adblock: !!blocker && state.adblock,
     theme: state.theme, skin: state.skin,
     sidebar: { ...state.sidebar, width: sideWidth() },
     bookmarkBar: state.bookmarkBar,
@@ -689,7 +692,7 @@ function profileCtx(profileId, container) {
         if (clean !== details.url) return callback({ redirectURL: clean })
       }
     }
-    blocker ? blocker.onBeforeRequest(details, callback) : callback({})
+    blockOn(details.webContents) ? blocker.onBeforeRequest(details, callback) : callback({})
   })
   ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, callback) => {
     const h = details.responseHeaders
@@ -705,9 +708,9 @@ function profileCtx(profileId, container) {
     if (key && dropCookies(details)) {
       const responseHeaders = { ...h }
       delete responseHeaders[key]
-      return blocker ? blocker.onHeadersReceived({ ...details, responseHeaders }, r => callback({ responseHeaders, ...r })) : callback({ responseHeaders })
+      return blockOn(details.webContents) ? blocker.onHeadersReceived({ ...details, responseHeaders }, r => callback({ responseHeaders, ...r })) : callback({ responseHeaders })
     }
-    blocker ? blocker.onHeadersReceived(details, callback) : callback({})
+    blockOn(details.webContents) ? blocker.onHeadersReceived(details, callback) : callback({})
   })
   const findTab = wc => state.tabs.find(t => t.view?.webContents === wc)
   const extensions = new ElectronChromeExtensions({
@@ -1396,6 +1399,7 @@ const commands = {
     if (key === 'dlDirReset') state.dl.dir = ''
     if (key === 'pwLockAfter' && [1, 5, 15, 60].includes(value)) state.pwLockAfter = value
     if (key === 'stripTracking') state.stripTracking = !!value
+    if (key === 'adblock') { state.adblock = !!value; activeTab()?.view?.webContents.reload() } // filter kosmetik yang sudah terpasang baru hilang setelah reload
     if (key === 'privateWipeAfter' && [0, 15, 30, 60].includes(value)) state.privateWipeAfter = value
     if (key === 'focusSites' && Array.isArray(value)) state.focus.sites = [...new Set(value.map(s => String(s).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')).filter(Boolean))].slice(0, 100)
     render(true)
@@ -2828,7 +2832,7 @@ app.whenReady().then(async () => {
     // 1. scriptlet iframe disuntik ke main frame -> arahkan ke frame pengirimnya
     // 2. scriptlet tidak dibungkus -> `class JSONPath`/`safeSelf` saling bentrok di global. Bungkus per script.
     const inject = blocker.onInjectCosmeticFilters
-    blocker.onInjectCosmeticFilters = (e, url, msg) => inject({
+    blocker.onInjectCosmeticFilters = (e, url, msg) => blockOn(e.sender) && inject({
       frameId: e.frameId,
       processId: e.processId,
       sender: {
