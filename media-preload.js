@@ -51,3 +51,32 @@ addEventListener('click', e => {
   e.preventDefault(); e.stopImmediatePropagation()
   ipcRenderer.send('glance', a.href)
 }, true)
+
+// YouTube anti-adblock: Ghostery menyuntik scriptlet lewat IPC (async) -> terlambat, player sudah membaca data iklan,
+// lalu request iklan diblokir dan YouTube menampilkan "Pemblokir iklan melanggar ToS". Brave/uBO membuang data iklan
+// dari respons player SEBELUM skrip halaman jalan (json-prune adPlacements/playerAds/adSlots), jadi player tak pernah
+// mencoba memutar iklan. Preload ini jalan di document-start, jadi tekniknya sama.
+contextBridge.executeInMainWorld({
+  func: () => {
+    if (!/(^|\.)youtube(-nocookie)?\.com$/.test(location.hostname)) return
+    const KEYS = ['adPlacements', 'adSlots', 'playerAds', 'adBreakHeartbeatParams']
+    // sesi yang sudah ditandai: server mengirim status ERROR + layar "Pemblokir iklan..." tapi stream tetap disertakan -> pulihkan
+    const unflag = t => {
+      const ps = t.playabilityStatus
+      if (ps?.errorScreen?.enforcementMessageViewModel && t.streamingData) { ps.status = 'OK'; delete ps.errorScreen }
+      delete t.auxiliaryUi?.messageRenderers?.bkaEnforcementMessageViewModel
+    }
+    const prune = o => {
+      if (o && typeof o === 'object') for (const t of [o, o.playerResponse]) if (t && typeof t === 'object') { for (const k of KEYS) delete t[k]; unflag(t) }
+      return o
+    }
+    const parse = JSON.parse
+    JSON.parse = function (...a) { return prune(parse.apply(this, a)) }
+    const json = Response.prototype.json
+    Response.prototype.json = function () { return json.call(this).then(prune) }
+    for (const name of ['ytInitialPlayerResponse', 'ytInitialData']) {
+      let v
+      Object.defineProperty(window, name, { configurable: true, get: () => v, set: x => { v = prune(x) } })
+    }
+  },
+})
