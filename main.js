@@ -543,7 +543,7 @@ function flush() {
   if (petWin && petState !== petSent) { petSent = petState; petWin.webContents.send('pet-state', JSON.parse(petState)) }
   // profil privat tidak pernah ditulis ke disk; tab profil sementara tidak dipulihkan setelah restart
   const priv = new Set(state.profiles.filter(p => p.ephemeral).map(p => p.id))
-  const tabs = state.tabs.filter(t => !priv.has(t.profileId) && !isTemp(t.container) && !profileOf(t.profileId)?.tempAfter).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container, awake }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container, awake }))
+  const tabs = state.tabs.filter(t => !priv.has(t.profileId) && !isTemp(t.container) && !profileOf(t.profileId)?.tempAfter).map(({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container, awake, opens }) => ({ profileId, wsId, url, title, favicon, lastActive, group, pinned, pinUrl, tg, container, awake, opens }))
   for (const gid in state.tabGroups) if (!state.tabs.some(t => t.tg === gid)) delete state.tabGroups[gid] // grup tanpa tab dibuang
   const profiles = state.profiles.filter(p => !p.ephemeral)
   const sitePerms = Object.fromEntries(Object.entries(state.sitePerms).filter(([id]) => !priv.has(id)))
@@ -982,7 +982,10 @@ function sleepDelay(t, mem) {
   if (mb > 700) x = Math.max(1, x / 2)
   return state.sleepAfter * 60000 * x
 }
-const STALE_TAB = 7 * 24 * 3600000
+// auto-close per profil (closeAfter jam, 0 = mati, default 7 hari): tab yang jarang dibuka (< 5 kali) ditutup setelah
+// closeAfter tanpa dipakai; tab yang sering dibuka baru setelah 3x lipatnya
+const CLOSE_AFTER = [0, 1, 6, 12, 24, 72, 168, 720]
+const staleLimit = t => (profileOf(t.profileId)?.closeAfter ?? 168) * 3600000 * ((t.opens || 0) < 5 ? 1 : 3)
 const idleSince = t => Math.max(t.lastActive || 0, t.seenAt || 0) // seenAt: terakhir tampil di layar
 const DIRTY_JS = `[...document.querySelectorAll('textarea, input:is([type=text], [type=email], [type=url], [type=tel], [type=number], :not([type]))')].some(e => e.value && e.value !== e.defaultValue)`
 function sleepIfIdle(t) {
@@ -1130,6 +1133,7 @@ function zapPage() {
 function selectTab(t) {
   if (glance) closeGlance() // pindah tab = glance selesai (seperti Zen)
   if (findOpen && t !== activeTab()) commands.findClose()
+  if (t !== activeTab()) t.opens = (t.opens || 0) + 1 // auto-close: tab yang sering dibuka diberi waktu lebih lama
   t.lastActive = Date.now()
   state.activeProfile = t.profileId
   profileOf(t.profileId).activeWs = t.wsId
@@ -1404,7 +1408,7 @@ const commands = {
     if (key === 'focusSites' && Array.isArray(value)) state.focus.sites = [...new Set(value.map(s => String(s).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')).filter(Boolean))].slice(0, 100)
     render(true)
   },
-  profileUpdate: ({ id, name, color, icon, tempAfter }) => {
+  profileUpdate: ({ id, name, color, icon, tempAfter, closeAfter }) => {
     const p = profileOf(id)
     if (!p) return
     if (name?.trim()) p.name = name.trim().slice(0, 24)
@@ -1412,6 +1416,7 @@ const commands = {
     p.icon = icon || ''
     // profil sementara: tab yang tidak dipakai ditutup sendiri setelah tempAfter menit, tanpa riwayat, tidak dipulihkan saat restart
     if ([0, 5, 15, 30, 60].includes(tempAfter) && !p.ephemeral) { if (tempAfter) p.tempAfter = tempAfter; else delete p.tempAfter }
+    if (CLOSE_AFTER.includes(closeAfter)) p.closeAfter = closeAfter
     render(true)
   },
 
@@ -2002,6 +2007,15 @@ const commands = {
     state.tabs.splice(state.tabs.indexOf(t), 1)
     const last = state.tabs.findLastIndex(x => x.tg === gid)
     state.tabs.splice(last + 1, 0, t)
+    render(true)
+  },
+  // seret tab ke atas/bawah: taruh sebelum/sesudah tab tujuan, ikut grup tab tujuan
+  tabReorder: ({ id, target, after }) => {
+    const t = state.tabs.find(t => t.id === id), to = state.tabs.find(t => t.id === target)
+    if (!t || !to || t === to || t.pinned || to.pinned) return
+    state.tabs.splice(state.tabs.indexOf(t), 1)
+    state.tabs.splice(state.tabs.indexOf(to) + (after ? 1 : 0), 0, t)
+    if (to.tg) t.tg = to.tg; else delete t.tg
     render(true)
   },
   tgRemove: id => { const t = state.tabs.find(t => t.id === id); if (t) { delete t.tg; render(true) } },
@@ -2919,15 +2933,15 @@ app.whenReady().then(async () => {
       // profil sementara: tab tidak dipakai selama tempAfter menit ditutup (tab dipin tetap)
       const temp = profileOf(t.profileId)?.tempAfter
       if (temp && !t.pinned && now - idleSince(t) > temp * 60000) { expired.push(t); continue }
-      // tab tidak dibuka lebih dari 7 hari ditutup otomatis (tab dipin, di grup, atau split tetap)
-      if (!t.pinned && !t.tg && !t.group && t.lastActive && now - idleSince(t) > STALE_TAB) { stale.push(t); continue }
+      // auto-close (tab dipin, di grup, atau split tetap)
+      if (!t.pinned && !t.tg && !t.group && t.lastActive && staleLimit(t) && now - idleSince(t) > staleLimit(t)) { stale.push(t); continue }
       // hemat memori: tab tidak tampil & tidak bersuara ditidurkan, batasnya menyesuaikan isi tab (sleepDelay)
       if (state.sleepAfter && t.view && now - idleSince(t) > sleepDelay(t, mem)) sleepIfIdle(t)
     }
     expired.forEach(closeTab)
     if (expired.length) toast(`Temporary profile: closed ${expired.length} unused ${expired.length === 1 ? 'tab' : 'tabs'} (⌘⇧T to reopen)`)
     stale.forEach(closeTab)
-    if (stale.length) toast(`Closed ${stale.length} ${stale.length === 1 ? 'tab' : 'tabs'} not opened for 7 days (⌘⇧T to reopen)`)
+    if (stale.length) toast(`Auto-closed ${stale.length} unused ${stale.length === 1 ? 'tab' : 'tabs'} (⌘⇧T to reopen)`)
     if (vault.unlocked() && now - pwLastUse > state.pwLockAfter * 60000) pwLock()
     if (process.platform === 'darwin' && app.getBadgeCount()) app.setBadgeCount(0) // badge dari service worker (tanpa preload): Dock tetap bersih
     if (state.focus.until && !focusOn()) { state.focus.until = 0; win.webContents.send('toast', 'Focus session finished. Nice work!') }

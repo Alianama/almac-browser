@@ -1571,8 +1571,22 @@ function renderTabs(tabs, groups = {}) {
       style: [g && '--gc:' + g.color, cont && '--cc:' + cont.color].filter(Boolean).join(';'),
       draggable: true,
       // seret tab ke Almi untuk menutupnya (dia memakannya)
-      ondragstart: e => { e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; almac.cmd('petFeed', t.id) },
-      ondragend: () => almac.cmd('petFeedEnd'),
+      ondragstart: e => { dragTab = t.id; e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; almac.cmd('petFeed', t.id) },
+      ondragend: () => { dragTab = null; almac.cmd('petFeedEnd') },
+      // seret ke atas/bawah: garis penanda di atas/bawah tab tujuan, dilepas -> pindah ke situ
+      ondragover(e) {
+        if (!dragTab || dragTab === t.id) return
+        e.preventDefault()
+        const after = e.clientY - this.getBoundingClientRect().top > this.offsetHeight / 2
+        this.classList.toggle('drop-before', !after); this.classList.toggle('drop-after', after)
+      },
+      ondragleave() { this.classList.remove('drop-before', 'drop-after') },
+      ondrop(e) {
+        this.classList.remove('drop-before', 'drop-after')
+        if (!dragTab || dragTab === t.id) return
+        e.preventDefault()
+        almac.cmd('tabReorder', { id: dragTab, target: t.id, after: e.clientY - this.getBoundingClientRect().top > this.offsetHeight / 2 })
+      },
       className: 'tab' + (t.active ? ' active' : '') + (t.sleeping ? ' sleeping' : '') + (t.loading ? ' loading' : '') + (g ? ' in-group' : '') + (cont ? ' in-container' : '') + (seen.has(t.id) ? '' : ' new'),
       title: (cont ? `[${cont.name}] ` : '') + (t.sleeping ? t.url + '\n(sleeping, saving RAM)' : t.url),
       onclick: () => almac.cmd('select', t.id),
@@ -1630,8 +1644,9 @@ document.querySelector('.nav [data-cmd=newTab]').addEventListener('contextmenu',
   ])
 })
 
+let dragTab = null // id tab yang sedang diseret (urutkan tab)
 function editProfile(p) {
-  const draft = { name: p.name, color: p.color, icon: p.icon || '', tempAfter: p.tempAfter || 0 }
+  const draft = { name: p.name, color: p.color, icon: p.icon || '', tempAfter: p.tempAfter || 0, closeAfter: p.closeAfter ?? 168 }
   const preview = el('div', { className: 'icon-preview', title: 'Click to play animation' })
   const setPreview = play => {
     preview.replaceChildren(draft.icon ? wsIcon(draft.icon) : el('span', { className: 'wsi letter', textContent: (draft.name.trim()[0] || '?').toUpperCase() }))
@@ -1655,13 +1670,19 @@ function editProfile(p) {
     type: 'button', className: v === draft.tempAfter ? 'on ask' : '', textContent: v ? 'Close after ' + t : t,
     onclick() { draft.tempAfter = v; tempSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
   })))
+  const closeSeg = el('div', { className: 'seg' }, ...[[0, 'Never'], [1, '1 hour'], [6, '6 hours'], [12, '12 hours'], [24, '1 day'], [72, '3 days'], [168, '7 days'], [720, '30 days']].map(([v, t]) => el('button', {
+    type: 'button', className: v === draft.closeAfter ? 'on ask' : '', textContent: t,
+    onclick() { draft.closeAfter = v; closeSeg.querySelectorAll('button').forEach(b => b.className = b === this ? 'on ask' : '') },
+  })))
   setPreview()
   openModal('Edit profile', [
     el('div', { className: 'preview-row' }, preview, el('label', { className: 'row' }, el('span', { textContent: 'Name' }), name)),
     el('div', { className: 'row' }, el('span', { textContent: 'Color' }), colors),
     el('div', { className: 'row' }, el('span', { textContent: 'Icon (optional, replaces the letter)' }), search, grid),
     ...(p.ephemeral ? [] : [el('div', { className: 'row' }, el('span', { textContent: 'Temporary mode' }), tempSeg,
-      el('p', { className: 'modal-text', style: 'font-size:11px', textContent: 'Tabs you stop using close by themselves, no history is kept and tabs are not restored after a restart (logins stay). Pinned tabs, meetings and music are never closed.' }))]),
+      el('p', { className: 'modal-text', style: 'font-size:11px', textContent: 'Tabs you stop using close by themselves, no history is kept and tabs are not restored after a restart (logins stay). Pinned tabs, meetings and music are never closed.' })),
+      el('div', { className: 'row' }, el('span', { textContent: 'Auto-close unused tabs after' }), closeSeg,
+        el('p', { className: 'modal-text', style: 'font-size:11px', textContent: 'Tabs you rarely open (or opened only once) close after this time unused. Tabs you open often get 3× longer. Pinned, grouped and split tabs, meetings and music are never closed. ⌘⇧T reopens a closed tab.' }))]),
   ], [
     { label: 'Cancel' },
     { label: 'Save', primary: true, onClick: () => almac.cmd('profileUpdate', { id: p.id, ...draft }) },
