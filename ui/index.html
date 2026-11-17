@@ -25,9 +25,8 @@
     <div class="ext-row"><browser-action-list id="actions" alignment="bottom right"></browser-action-list><button id="extBtn" class="mini" title="Extensions (almac://extensions)" data-icon="ext"></button><button id="dlBtn" class="mini" title="Downloads (⌘J)"><span data-icon="download"></span><canvas id="dlRing" width="10" height="10" hidden></canvas><b id="dlCount" class="pixel" hidden></b></button></div>
 
     <section class="tabs-card glass" id="tabsPanel">
-      <div class="label"><button type="button" id="profBadge" class="prof-badge pixel"></button><span id="wsName" class="ws-name" title="Double-click to edit workspace. Swipe with 2/3 fingers here to switch"></span><span class="ws-tools"><span id="count"></span><button class="mini" id="wsEditBtn" type="button" title="Edit workspace" data-icon="edit"></button></span></div>
+      <div class="label"><button type="button" id="profBadge" class="prof-badge pixel"></button><span class="ws-tools"><span id="count"></span></span></div>
       <div id="tabs"></div>
-      <div class="ws-bar"><div id="wsDots"></div><button class="mini" id="wsAddBtn" type="button" title="New workspace" data-icon="plus"></button></div>
     </section>
 
     <form id="newProfile" class="glass">
@@ -422,65 +421,6 @@ async function openImport() {
   $('.modal .actions').append(go)
 }
 
-// ---- workspace ----
-// ---- geser 2 jari di panel tab: daftar tab ikut jari, lepas -> pindah atau mantul balik ----
-// Sumbu dikunci per gesture: 6px pertama menentukan horizontal (geser workspace, scroll vertikal dikunci)
-// atau vertikal (scroll biasa, geser diabaikan) sampai gesture + momentumnya selesai -> tidak saling tumpang tindih.
-// Electron tidak memberi fase gesture, jadi momentum dikenali dari pola event:
-// setelah pindah, event yang terus melemah = sisa momentum (diabaikan); jeda > 80ms atau lonjakan = gesture baru.
-const tabsPanel = $('#tabsPanel')
-const tabsEl = $('#tabs')
-const SWIPE_COMMIT = 70 // px geser sebelum pindah workspace
-const AXIS_LOCK = 6     // px sebelum sumbu gesture diputuskan
-const GESTURE_GAP = 120 // ms tanpa event = gesture selesai
-let wsIndex = 0, wsCount = 1
-let gesture = null   // { axis: 'x'|'y'|null, sx, sy, lastT }
-let drag = null      // { dx }
-let cooldown = null  // { lastT, lastAbs } sesudah pindah
-let idleTimer, frame, pendingX = 0, pendingAnim = false
-const setDrag = (x, animate) => {
-  pendingX = x; pendingAnim = animate
-  frame ||= requestAnimationFrame(() => { // satu update per frame layar
-    frame = 0
-    tabsEl.style.transition = pendingAnim ? 'transform .22s var(--ease), opacity .22s var(--ease)' : 'none'
-    tabsEl.style.transform = pendingX ? `translateX(${pendingX}px)` : ''
-    tabsEl.style.opacity = pendingX ? Math.max(0.2, 1 - Math.abs(pendingX) / 260) : ''
-  })
-}
-tabsPanel.addEventListener('wheel', e => {
-  if (!gesture || e.timeStamp - gesture.lastT > GESTURE_GAP) gesture = { axis: null, sx: 0, sy: 0 }
-  gesture.lastT = e.timeStamp
-  if (!gesture.axis) {
-    gesture.sx += Math.abs(e.deltaX); gesture.sy += Math.abs(e.deltaY)
-    if (Math.max(gesture.sx, gesture.sy) < AXIS_LOCK) { e.preventDefault(); return } // tunggu arah jelas
-    gesture.axis = gesture.sx > gesture.sy ? 'x' : 'y'
-  }
-  if (gesture.axis === 'y') return // scroll vertikal biasa
-  e.preventDefault() // sumbu x: kunci scroll vertikal
-
-  const abs = Math.abs(e.deltaX)
-  if (cooldown) {
-    const fresh = e.timeStamp - cooldown.lastT > 80 || abs > cooldown.lastAbs * 1.6 + 4
-    if (!fresh) { cooldown.lastT = e.timeStamp; cooldown.lastAbs = abs; return }
-    cooldown = null
-  }
-  drag ||= { dx: 0 }
-  drag.dx -= e.deltaX
-  const dir = drag.dx < 0 ? 1 : -1 // jari ke kiri -> workspace berikutnya
-  const hasNext = wsIndex + dir >= 0 && wsIndex + dir < wsCount
-  if (hasNext && Math.abs(drag.dx) > SWIPE_COMMIT) {
-    setDrag(-dir * 140, true) // lempar keluar, workspace baru masuk dari sisi lain (lihat onState)
-    almac.cmd('wsStep', dir)
-    drag = null
-    cooldown = { lastT: e.timeStamp, lastAbs: abs }
-    clearTimeout(idleTimer)
-    return
-  }
-  setDrag(hasNext ? drag.dx : drag.dx * 0.25) // ujung daftar workspace: efek karet
-  clearTimeout(idleTimer)
-  idleTimer = setTimeout(() => { drag = null; setDrag(0, true) }, 90) // jari diangkat tanpa cukup jauh -> mantul balik
-}, { passive: false })
-
 // ---- modal pixel (pengganti dialog bawaan macOS) ----
 // Halaman web adalah native view yang selalu di atas UI, jadi main menyembunyikannya selama modal terbuka
 // dan mengirim snapshot halaman untuk dijadikan latar blur.
@@ -654,11 +594,10 @@ document.addEventListener('mouseover', e => {
 })
 document.addEventListener('click', e => playIn(e.target.closest(ICON_HOSTS)))
 
-// ---- workspace ----
-let currentWs, lastState
-const WS_COLORS = ['', '#41a6f6', '#ffc93c', '#ff6b7a', '#7eebd3', '#a7f070', '#b07cff', '#ff9f43']
+let lastState
+const WS_COLORS = ['', '#41a6f6', '#ffc93c', '#ff6b7a', '#7eebd3', '#a7f070', '#b07cff', '#ff9f43'] // warna grup tab & profil
 
-// pemilih ikon animasi (dipakai workspace & profil): [kotak cari, grid]
+// pemilih ikon animasi (dipakai profil): [kotak cari, grid]
 function iconPicker(draft, onPick) {
   const search = el('input', { className: 'field', placeholder: `Search ${ICON_NAMES.length} icons, e.g. code, home`, autocomplete: 'off' })
   const grid = el('div', { className: 'icon-grid' })
@@ -686,84 +625,6 @@ function iconPicker(draft, onPick) {
   search.oninput = () => { clearTimeout(timer); timer = setTimeout(fill, 100) }
   fill()
   return [search, grid]
-}
-
-function editWorkspace(w) { // tanpa argumen = buat workspace baru
-  const isNew = !w
-  const s = lastState
-  const draft = { name: w?.name || '', icon: w?.icon || '', color: w?.color || '' }
-  const mark = (box, btn) => { box.querySelectorAll('.pick').forEach(b => b.classList.toggle('on', b === btn)) }
-
-  const profileColor = s.profiles.find(p => p.id === s.activeProfile).color
-  // pratinjau besar seperti saat membuat topic di Telegram
-  const preview = el('div', { className: 'icon-preview', title: 'Click to play animation' })
-  const setPreview = play => {
-    preview.replaceChildren(draft.icon ? wsIcon(draft.icon) : el('span', { className: 'wsi letter', textContent: (draft.name.trim()[0] || '?').toUpperCase() }))
-    preview.style.setProperty('--c', draft.color || profileColor)
-    if (play) { preview.classList.remove('bump'); void preview.offsetWidth; preview.classList.add('bump'); playIcon(preview.firstChild) }
-  }
-  preview.onclick = () => setPreview(true)
-  const name = el('input', { className: 'field', value: draft.name, placeholder: 'e.g. Work, School, Gaming', maxLength: 24, oninput: () => { draft.name = name.value; if (!draft.icon) setPreview() } })
-
-  const [search, grid] = iconPicker(draft, () => setPreview(true))
-  setPreview()
-  const custom = el('input', { type: 'color', className: 'pick-color', value: draft.color || '#ffc93c', title: 'Custom color' })
-  const colors = el('div', { className: 'picker' }, ...WS_COLORS.map(c => {
-    const b = el('button', { type: 'button', className: 'pick swatch' + (c === draft.color ? ' on' : ''), title: c || 'Use profile color', onclick() { draft.color = c; mark(colors, this) } })
-    b.style.setProperty('--c', c || profileColor)
-    if (!c) b.textContent = 'P'
-    b.addEventListener('click', () => setPreview())
-    return b
-  }), custom)
-  custom.oninput = () => { draft.color = custom.value; mark(colors, null); setPreview() }
-  if (draft.color && !WS_COLORS.includes(draft.color)) custom.classList.add('on')
-
-  const body = [
-    el('div', { className: 'preview-row' }, preview, el('label', { className: 'row' }, el('span', { textContent: 'Name' }), name)),
-    el('div', { className: 'row' }, el('span', { textContent: 'Icon' }), search, grid),
-    el('div', { className: 'row' }, el('span', { textContent: 'Color' }), colors),
-  ]
-  if (!isNew) {
-    const i = s.workspaces.findIndex(x => x.id === w.id)
-    body.push(
-      el('div', { className: 'row' }, el('span', { textContent: 'Order' }), el('div', { className: 'inline' },
-        el('button', { type: 'button', disabled: i === 0, onclick: () => { almac.cmd('wsMove', { id: w.id, dir: -1 }); closeModal() } }, iconEl('up'), 'Move left'),
-        el('span', { className: 'muted', textContent: `${i + 1} of ${s.workspaces.length}` }),
-        el('button', { type: 'button', disabled: i === s.workspaces.length - 1, onclick: () => { almac.cmd('wsMove', { id: w.id, dir: 1 }); closeModal() } }, 'Move right', iconEl('down')))),
-      el('div', { className: 'row danger-zone' }, el('span', { textContent: `${w.tabs} ${w.tabs === 1 ? 'tab' : 'tabs'}` }), el('div', { className: 'inline' },
-        twoStep('Close all tabs', 'Sure? Click again', () => almac.cmd('wsCloseTabs', w.id), !w.tabs),
-        twoStep('Delete workspace', 'Sure? Click again', () => almac.cmd('wsRemove', w.id), s.workspaces.length < 2))),
-    )
-  }
-  openModal(isNew ? 'New workspace' : 'Edit workspace', body, [
-    { label: 'Cancel' },
-    { label: isNew ? 'Create' : 'Save', primary: true, onClick: () => {
-      const data = { name: draft.name.trim(), icon: draft.icon, color: draft.color }
-      isNew ? almac.cmd('wsAdd', data) : almac.cmd('wsUpdate', { id: w.id, ...data })
-    } },
-  ])
-}
-
-const wsName = $('#wsName')
-wsName.addEventListener('dblclick', () => editWorkspace(currentWs))
-$('#wsEditBtn').addEventListener('click', () => editWorkspace(currentWs))
-$('#wsAddBtn').addEventListener('click', () => editWorkspace())
-
-function renderWorkspaces(s) {
-  currentWs = s.workspaces.find(w => w.id === s.activeWs)
-  wsIndex = s.workspaces.indexOf(currentWs)
-  wsCount = s.workspaces.length
-  wsName.replaceChildren(...(currentWs.icon ? [wsIcon(currentWs.icon)] : []), el('span', { textContent: currentWs.name }))
-  $('#wsDots').replaceChildren(...s.workspaces.map(w => {
-    const b = (el('button', {
-      className: 'dot' + (w.id === s.activeWs ? ' on' : '') + (w.icon ? ' has-icon' : ''),
-      title: `${w.name} (${w.tabs} ${w.tabs === 1 ? 'tab' : 'tabs'}) — right-click to edit`,
-      onclick: () => almac.cmd('wsSwitch', w.id),
-      oncontextmenu: e => { e.preventDefault(); editWorkspace(w) },
-    }, ...(w.icon ? [wsIcon(w.icon)] : [])))
-    if (w.color) b.style.setProperty('--wc', w.color)
-    return b
-  }))
 }
 
 // ---- info situs (seperti ikon gembok di Chrome) ----
@@ -1160,7 +1021,7 @@ async function openBmMenu(anchor, nodes, level = 0) {
       row.onmouseenter = () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => openBmMenu(row, n.children, level + 1), 140) }
       return row
     }
-    const row = el('button', { type: 'button', className: 'ctx-item', title: n.url, onclick: e => openBookmark(n, e), onauxclick: e => openBookmark(n, e), oncontextmenu: e => bookmarkCtx(n, e) },
+    const row = el('button', { type: 'button', className: 'ctx-item', title: n.url, onclick: e => openBookmark(n, e), onauxclick: e => { if (e.button === 1) openBookmark(n, e) }, oncontextmenu: e => bookmarkCtx(n, e) },
       favicon(n), el('span', { textContent: n.title || n.url }))
     row.onmouseenter = () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => closeBmMenus(level + 1), 140) }
     return row
@@ -1180,7 +1041,7 @@ function renderBar() {
   bmItems.replaceChildren(...(bmTreeNodes.length ? bmTreeNodes.map(n => {
     const b = n.children
       ? el('button', { type: 'button', className: 'bm-item', title: n.name, onclick() { this.classList.contains('open') ? closeBmMenus() : openBmMenu(this, n.children) }, oncontextmenu: e => folderCtx(n, e) }, iconEl('folder'), el('span', { textContent: n.name }))
-      : el('button', { type: 'button', className: 'bm-item', title: n.url, onclick: e => openBookmark(n, e), onauxclick: e => openBookmark(n, e), oncontextmenu: e => bookmarkCtx(n, e) }, favicon(n), el('span', { textContent: n.title || n.url }))
+      : el('button', { type: 'button', className: 'bm-item', title: n.url, onclick: e => openBookmark(n, e), onauxclick: e => { if (e.button === 1) openBookmark(n, e) }, oncontextmenu: e => bookmarkCtx(n, e) }, favicon(n), el('span', { textContent: n.title || n.url }))
     b._node = n
     return b
   }) : [el('span', { className: 'bm-hint', textContent: 'No bookmarks yet — press ⌘D, or import from Chrome/Brave on the Bookmarks page.' })]))
@@ -1403,22 +1264,6 @@ almac.onState(s => {
   $('#startInput').placeholder = `Search ${s.engineName} or type a URL`
   url.placeholder = `Search ${s.engineName} or type a URL`
 
-  const wsKey = JSON.stringify([s.workspaces, s.activeWs])
-  if (wsKey !== lastWs) {
-    lastWs = wsKey
-    renderWorkspaces(s)
-    // animasi geser saat pindah workspace
-    if (lastWsId && lastWsId !== s.activeWs) {
-      const i = s.workspaces.findIndex(w => w.id === s.activeWs), j = s.workspaces.findIndex(w => w.id === lastWsId)
-      setDrag(0) // hapus posisi geser sebelum animasi masuk
-      tabsEl.classList.remove('slide-l', 'slide-r')
-      void tabsEl.offsetWidth
-      tabsEl.classList.add(i > j ? 'slide-l' : 'slide-r')
-      playIcon(wsName.querySelector('.wsi'))
-    }
-    lastWsId = s.activeWs
-  }
-
   // bangun ulang daftar hanya kalau berubah (angka blokir sering berubah -> jangan bikin tab berkedip)
   const tabsKey = JSON.stringify([s.tabs, s.tabGroups])
   if (tabsKey !== lastTabs) { lastTabs = tabsKey; renderTabs(s.tabs, s.tabGroups) }
@@ -1428,7 +1273,7 @@ almac.onState(s => {
   if (profilesKey !== lastProfiles) { lastProfiles = profilesKey; renderProfiles(s) }
 })
 
-let lastTabs, lastProfiles, lastExt, lastWs, lastWsId, startFocusedFor = null
+let lastTabs, lastProfiles, lastExt, startFocusedFor = null
 
 // toolbar ekstensi yang di-pin: satu baris, scroll ke samping kalau banyak
 const actionsEl = $('#actions')
@@ -1592,10 +1437,7 @@ function renderTabs(tabs, groups = {}) {
       onclick: () => almac.cmd('select', t.id),
       oncontextmenu: e => {
         e.preventDefault()
-        const others = lastState.workspaces.filter(w => w.id !== lastState.activeWs)
         ctxMenu(e.clientX, e.clientY, [
-          ...others.map(w => ({ icon: 'move', label: 'Move to ' + w.name, onClick: () => almac.cmd('tabMove', { id: t.id, wsId: w.id }) })),
-          ...(others.length ? ['-'] : []),
           { icon: 'pin', label: 'Pin tab (⌘⇧D)', disabled: !t.url, onClick: () => almac.cmd('pinTab', t.id) },
           { icon: 'copy', label: 'Copy URL', onClick: () => almac.cmd('copyUrl', t.id) },
           { icon: t.muted ? 'volume-2' : 'volume-x', label: t.muted ? 'Unmute tab' : 'Mute tab', disabled: t.sleeping, onClick: () => almac.cmd('muteTab', t.id) },
@@ -2165,7 +2007,7 @@ async function openPalette() {
       items = TOOL_RE.test(q) ? [...tools, { icon: 'search', text: q, sub: 'Search ' + lastState.engineName, run: () => almac.cmd('navigate', q) }] : tools
       idx = 0; return draw()
     }
-    const tabItems = tabs.filter(t => !lq || has(t.title + ' ' + (t.url || ''))).slice(0, 8).map(t => ({ icon: 'layout-grid', text: t.title, sub: 'Tab · ' + t.ws, run: () => almac.cmd('select', t.id) }))
+    const tabItems = tabs.filter(t => !lq || has(t.title + ' ' + (t.url || ''))).slice(0, 8).map(t => ({ icon: 'layout-grid', text: t.title, sub: 'Tab', run: () => almac.cmd('select', t.id) }))
     items = q ? [...tabItems, ...cmds.slice(0, 5)] : [...tabItems.slice(0, 5), ...cmds]
     if (q) {
       const r = await almac.ask('suggest', q)
@@ -2223,6 +2065,7 @@ almac.onOpenStats(openStats)
 // hanya meminta ke main saat ditampilkan/disalin
 const askErr = async (type, arg) => { try { return await almac.ask(type, arg) } catch (e) { return { error: e.message.replace(/^Error invoking remote method 'ask': (Error: )?/, '') } } }
 const pwField = (placeholder, value = '') => el('input', { className: 'field', type: 'password', placeholder, value, autocomplete: 'off', spellcheck: false })
+const pwEye = pw => el('button', { type: 'button', className: 'mini', title: 'Show / hide password', onclick() { pw.type = pw.type === 'password' ? 'text' : 'password'; this.replaceChildren(iconEl(pw.type === 'text' ? 'eye-off' : 'eye')) } }, iconEl('eye'))
 
 // setup / buka kunci; resolve true kalau brankas terbuka
 function pwUnlockModal(reason = '') {
@@ -2270,7 +2113,8 @@ async function openPasswords(q = '') {
       el('img', { className: 'fav-img', src: lastState.favicons?.[e.host] || '', onerror() { this.replaceWith(iconEl('globe')) } }),
       el('div', { className: 'meta' }, el('b', { textContent: e.title || e.host }), el('small', { textContent: e.username || '(no username)' })),
       el('button', { type: 'button', className: 'mini', title: 'Copy username', onclick: ev => { ev.stopPropagation(); almac.ask('pwCopy', { id: e.id, field: 'username' }); toast('Username copied', 'copy') } }, iconEl('user')),
-      el('button', { type: 'button', className: 'mini', title: 'Copy password (cleared from clipboard after 30 s)', onclick: ev => { ev.stopPropagation(); almac.ask('pwCopy', { id: e.id }); toast('Password copied — clipboard clears in 30 s', 'key') } }, iconEl('copy'))))
+      el('button', { type: 'button', className: 'mini', title: 'Copy password (cleared from clipboard after 30 s)', onclick: ev => { ev.stopPropagation(); almac.ask('pwCopy', { id: e.id }); toast('Password copied — clipboard clears in 30 s', 'key') } }, iconEl('copy')),
+      el('button', { type: 'button', className: 'mini', title: 'View / edit username & password' }, iconEl('edit'))))
       : [el('p', { className: 'none', textContent: search.value ? 'No matches.' : 'No passwords yet. Sign in to a site and Almac will offer to save it, or import a CSV from Apple Passwords / Chrome.' })]))
   }
   let timer
@@ -2292,6 +2136,7 @@ async function openPasswords(q = '') {
     el('div', { className: 'day', textContent: 'This site · ' + site.host }),
     ...site.logins.map(e => el('div', { className: 'hrow pw-row' },
       iconEl('user'), el('div', { className: 'meta' }, el('b', { textContent: e.username || '(no username)' }), el('small', { textContent: e.host })),
+      el('button', { type: 'button', className: 'mini', title: 'View / edit username & password', onclick: () => editPassword(e) }, iconEl('edit')),
       el('button', { type: 'button', className: 'primary', onclick: () => { closeModal(); setTimeout(() => almac.cmd('pwFillActive', e.id), 120) } }, 'Fill')))) : ''
   await openModal('Passwords', [siteBox, search, tools, list], [{ label: 'Done', primary: true }])
   search.focus()
@@ -2306,12 +2151,11 @@ async function editPassword(e) {
   const user = el('input', { className: 'field', placeholder: 'Username or email', value: e?.username || '', spellcheck: false })
   const notes = el('textarea', { className: 'field focus-sites', placeholder: 'Notes', value: e?.notes || '', rows: 3 })
   const err = el('p', { className: 'modal-text error' })
-  const show = el('button', { type: 'button', className: 'mini', title: 'Show / hide', onclick: () => { pw.type = pw.type === 'password' ? 'text' : 'password' } }, iconEl('info'))
   const gen = el('button', { type: 'button', className: 'mini', title: 'Generate strong password', onclick: async () => { pw.value = await almac.ask('pwGenerate'); pw.type = 'text' } }, iconEl('retry'))
   openModal(isNew ? 'Add password' : (e.title || e.host), [
     el('label', { className: 'row' }, el('span', { textContent: 'Website' }), site),
     el('label', { className: 'row' }, el('span', { textContent: 'Username' }), user),
-    el('div', { className: 'row' }, el('span', { textContent: 'Password' }), el('div', { className: 'inline' }, pw, show, gen)),
+    el('div', { className: 'row' }, el('span', { textContent: 'Password' }), el('div', { className: 'inline' }, pw, pwEye(pw), gen)),
     el('label', { className: 'row' }, el('span', { textContent: 'Notes' }), notes),
     ...(e?.hasOtp ? [el('p', { className: 'modal-text', textContent: 'Has a verification code (OTP) setup, kept for export.' })] : []),
     ...(!isNew ? [twoStep('Delete password', 'Sure? Delete', () => { almac.ask('pwDelete', e.id); setTimeout(openPasswords, 120) })] : []),
@@ -2382,16 +2226,29 @@ function passwordSettings() {
 }
 
 // tawaran simpan setelah login (main menunggu halaman pindah dulu)
-almac.onPwSave(async ({ id, host, username, update }) => {
+almac.onPwSave(async ({ id, host, username, password, update }) => {
   let deferred = false // Simpan/Jangan pernah: jawaban dikirim setelah brankas terbuka
-  const answer = action => almac.cmd('pwAnswer', { id, action })
+  const user = el('input', { className: 'field', placeholder: 'Username or email', value: username || '', autocomplete: 'off', spellcheck: false })
+  const pw = pwField('Password', password)
+  const answer = async action => {
+    const send = () => almac.ask('pwAnswer', { id, action, username: user.value, password: pw.value })
+    let r = action === 'skip' ? await send() : await pwReady() ? await send() : await almac.ask('pwAnswer', { id, action: 'skip' })
+    if (r === 'locked' && await pwUnlockModal()) r = await send() // terkunci otomatis di antara dua langkah
+    if (r === true && action === 'save') toast(update ? 'Password updated' : 'Password saved', 'key')
+    else if (r === 'locked') toast('Password not saved: Almac Passwords is locked', 'warn')
+  }
   openModal(update ? 'Update password?' : 'Save password?', [
-    el('p', { className: 'modal-text' }, el('b', { textContent: host }), ` · ${username || '(no username)'}`),
+    el('p', { className: 'modal-text' }, el('b', { textContent: host })),
+    el('label', { className: 'row' }, el('span', { textContent: 'Username' }), user),
+    el('div', { className: 'row' }, el('span', { textContent: 'Password' }), el('div', { className: 'inline' }, pw, pwEye(pw))),
     el('p', { className: 'modal-text', textContent: lastState.pw.unlocked ? 'Stored encrypted in Almac Passwords.' : lastState.pw.setup ? 'You will be asked for your master password.' : 'You will set up a master password first.' }),
   ], [
-    { label: 'Never for this site', onClick: () => { deferred = true; closeModal(); pwReady().then(ok => answer(ok ? 'never' : 'skip')); return false } },
+    { label: 'Never for this site', onClick: () => { deferred = true; closeModal(); setTimeout(() => answer('never'), 80); return false } },
     { label: 'Not now' },
-    { label: update ? 'Update' : 'Save', primary: true, onClick: () => { deferred = true; closeModal(); pwReady().then(ok => answer(ok ? 'save' : 'skip')); return false } },
+    { label: update ? 'Update' : 'Save', primary: true, onClick: () => {
+      if (!pw.value) return false
+      deferred = true; closeModal(); setTimeout(() => answer('save'), 80); return false
+    } },
   ], () => { if (!deferred) answer('skip') })
 })
 almac.onPwUnlock(() => pwUnlockModal())

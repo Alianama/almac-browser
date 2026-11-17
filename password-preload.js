@@ -21,10 +21,11 @@ if (window === window.top && (location.protocol === 'https:' || location.hostnam
   const scopeOf = el => el.form || el.getRootNode()
   const inScope = (el, scope) => scope === document || scope.contains?.(el) || el.getRootNode() === scope
   // username = kolom teks sebelum password (utamakan yang namanya mirip email/username)
-  function userFor(pw) {
-    const before = allInputs().filter(i => i !== pw && ['text', 'email', 'tel', ''].includes(i.type) && inScope(i, scopeOf(pw)) &&
+  // kolom username di luar <form> password (sering di SPA): cari di seluruh halaman
+  function userFor(pw, scope = scopeOf(pw)) {
+    const before = allInputs().filter(i => i !== pw && ['text', 'email', 'tel', ''].includes(i.type) && inScope(i, scope) &&
       (i.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING))
-    return before.filter(isUser).at(-1) || before.at(-1) || null
+    return before.filter(isUser).at(-1) || before.at(-1) || (scope !== document ? userFor(pw, document) : null)
   }
   function fieldsAround(field) {
     if (isPw(field)) return { pw: field, user: userFor(field) }

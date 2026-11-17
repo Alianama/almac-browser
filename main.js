@@ -186,7 +186,8 @@ function pwOffer(t) {
   }
   const id = ++pwSeq
   pendingPw.set(id, c)
-  win.webContents.send('pw-save', { id, host: new URL(c.origin).host, username: c.username, update: !!c.update })
+  // password ikut dikirim ke UI Almac (bukan ke halaman) supaya bisa dilihat & dikoreksi sebelum disimpan
+  win.webContents.send('pw-save', { id, host: new URL(c.origin).host, username: c.username, password: c.password, update: !!c.update })
 }
 
 // ---- picker share screen (dipakai kalau picker sistem macOS tidak tersedia) ----
@@ -312,6 +313,8 @@ function load() {
   if (!state.profiles.length) state.profiles.push({ id: 'p1', name: 'Personal', color: '#41a6f6' })
   if (!state.profiles.some(p => p.id === state.activeProfile)) state.activeProfile = state.profiles[0].id
   state.profiles.forEach(workspaces)
+  // workspace dihapus dari UI: tiap profil tinggal satu (yang aktif); tab dari workspace lain ikut pindah ke sana (baris wsId di bawah)
+  state.profiles.forEach(p => { p.workspaces = [p.workspaces.find(w => w.id === p.activeWs)] })
   state.tabs = state.tabs.map(t => ({
     ...t, id: nextTabId++, view: null, blocked: 0, // dipulihkan dalam kondisi tidur
     container: profileOf(t.profileId)?.containers?.some(c => c.id === t.container) ? t.container : undefined,
@@ -1475,64 +1478,6 @@ const commands = {
     render(true)
   },
 
-  // ---- workspace ----
-  wsSwitch: id => {
-    profileOf(state.activeProfile).activeWs = id
-    const t = activeTab()
-    t ? selectTab(t) : layout() // workspace kosong -> tampilkan layar kosong
-    render(true) // tanpa debounce supaya animasi geser terasa langsung
-  },
-  wsStep: dir => {
-    const list = profileOf(state.activeProfile).workspaces
-    const i = list.findIndex(w => w.id === activeWs())
-    const next = list[i + dir]
-    if (next) commands.wsSwitch(next.id)
-  },
-  wsAdd: ({ name, icon, color } = {}) => {
-    const p = profileOf(state.activeProfile)
-    const w = { id: uid('w'), name: name || 'Workspace ' + (p.workspaces.length + 1), icon, color }
-    p.workspaces.push(w)
-    commands.wsSwitch(w.id)
-  },
-  wsUpdate: ({ id, name, icon, color }) => {
-    const w = profileOf(state.activeProfile).workspaces.find(w => w.id === id)
-    if (!w) return
-    Object.assign(w, { name: name || w.name, icon, color })
-    render(true)
-  },
-  wsMove: ({ id, dir }) => {
-    const list = profileOf(state.activeProfile).workspaces
-    const i = list.findIndex(w => w.id === id), j = i + dir
-    if (i < 0 || j < 0 || j >= list.length) return
-    ;[list[i], list[j]] = [list[j], list[i]]
-    render(true)
-  },
-  wsCloseTabs: id => { // tab dipin tetap ada
-    const p = profileOf(state.activeProfile)
-    state.tabs.filter(t => t.profileId === p.id && t.wsId === id && !t.pinned).forEach(sleep)
-    state.tabs = state.tabs.filter(t => !(t.profileId === p.id && t.wsId === id && !t.pinned))
-    layout()
-    render(true)
-  },
-  wsRemove: id => {
-    const p = profileOf(state.activeProfile)
-    if (p.workspaces.length < 2) return
-    state.tabs.filter(t => t.profileId === p.id && t.wsId === id).forEach(sleep)
-    state.tabs = state.tabs.filter(t => !(t.profileId === p.id && t.wsId === id))
-    p.workspaces = p.workspaces.filter(w => w.id !== id)
-    commands.wsSwitch(p.workspaces[0].id)
-  },
-  tabMove: ({ id, wsId }) => {
-    const t = state.tabs.find(t => t.id === id)
-    if (!t) return
-    const wasActive = t === activeTab()
-    unsplit(t)
-    delete t.tg
-    t.wsId = wsId
-    const next = wasActive && activeTab()
-    if (next) selectTab(next); else if (wasActive) layout()
-    render(true)
-  },
   // ---- cari di halaman ----
   findOpen: () => { findOpen = true; layout(); render(true) },
   find: ({ text, forward = true, next = false }) => {
@@ -1697,15 +1642,6 @@ const commands = {
   webStore: () => newTab('https://chromewebstore.google.com/'),
   music: () => toggleMusic(),
   // iCloud Keychain tidak bisa diakses browser non-resmi -> salin domain & buka app Passwords untuk dicari
-  pwAnswer: ({ id, action }) => {
-    const c = pendingPw.get(id)
-    pendingPw.delete(id)
-    if (!c || !vault.unlocked()) return
-    if (action === 'never') { if (!vault.data.never.includes(c.origin)) vault.data.never.push(c.origin) }
-    else if (action === 'save') pwUpsert(c)
-    else return
-    vault.save(); pwTouch()
-  },
   pwLock,
   screenPick: ({ id, sourceId, tabId, audio }) => { const r = pendingScreens.get(id); pendingScreens.delete(id); r?.(sourceId || tabId ? { sourceId, tabId, audio: !!audio } : null) },
   screenAccess: () => desktopCapturer.getSources({ types: ['screen'] }).catch(() => {}), // memunculkan prompt izin macOS
@@ -2094,10 +2030,9 @@ const queries = {
   },
   importSources,
   importRun,
-  // command palette: semua tab di profil aktif (semua workspace)
+  // command palette: semua tab di profil aktif
   allTabs: () => state.tabs.filter(t => t.profileId === state.activeProfile).map(t => ({
     id: t.id, title: t.title || t.url || 'New tab', url: t.url, favicon: t.favicon,
-    ws: profileOf(t.profileId).workspaces.find(w => w.id === t.wsId)?.name,
   })),
   stats: () => Array.from({ length: 7 }, (_, i) => { const k = dayKey(new Date(Date.now() - (6 - i) * 864e5)); return { day: k, n: state.stats[k] || 0 } }),
   bookmarkCurrent: () => commands.bookmarkAddCurrent(),
@@ -2179,7 +2114,6 @@ queries.shortcuts = () => {
     { label: 'Glance a link (floating preview)', keys: ['⌥ click'] },
     { label: 'Glance: open as tab / close', keys: ['⌘↩', 'Esc'] },
     { label: 'Open link in new tab', keys: ['⌘ click'] },
-    { label: 'Switch workspace', keys: ['swipe on sidebar'] },
     { label: 'Close tab (feed it to Almi)', keys: ['drag to Almi'] },
   ] })
   return sections
@@ -2335,6 +2269,18 @@ Object.assign(queries, {
   pwSave: needVault(entry => { pwUpsert(entry); vault.save(); return true }),
   pwDelete: needVault(id => { vault.data.entries = vault.data.entries.filter(e => e.id !== id); vault.save(); return true }),
   pwGenerate: () => passwords.generate(),
+  // jawaban tawaran simpan; 'locked' = brankas terkunci lagi (auto-lock) -> UI minta buka lalu kirim ulang, tawaran tidak hilang
+  pwAnswer: ({ id, action, username, password }) => {
+    const c = pendingPw.get(id)
+    if (!c) return false
+    if (action !== 'skip' && !vault.unlocked()) return 'locked'
+    pendingPw.delete(id)
+    if (action === 'never') { if (!vault.data.never.includes(c.origin)) vault.data.never.push(c.origin) }
+    else if (action === 'save') pwUpsert({ origin: c.origin, username: String(username ?? c.username).trim().slice(0, 500), password: String(password || c.password).slice(0, 1000) })
+    else return false
+    vault.save(); pwTouch()
+    return true
+  },
   deviceSave: needVault(({ host, ...f }) => {
     const key = deviceKey(host)
     if (!key) throw new Error('Host is required')
@@ -2796,9 +2742,6 @@ function buildMenu() {
         { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: send('find-next') },
         { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: send('find-prev') },
         { type: 'separator' },
-        { label: 'Next Workspace', accelerator: MAC ? 'Ctrl+Command+Right' : 'Ctrl+Alt+PageDown', click: () => commands.wsStep(1) },
-        { label: 'Previous Workspace', accelerator: MAC ? 'Ctrl+Command+Left' : 'Ctrl+Alt+PageUp', click: () => commands.wsStep(-1) },
-        { type: 'separator' },
         { label: 'Passwords', accelerator: 'CmdOrCtrl+Shift+P', click: send('open-passwords') },
         { label: 'Autofill Login', accelerator: 'CmdOrCtrl+Shift+L', click: () => commands.pwFillActive() },
         { label: 'Find Password in Keychain', visible: MAC, click: () => commands.passwords() },
@@ -2895,12 +2838,6 @@ app.whenReady().then(async () => {
   win.on('leave-full-screen', () => { htmlFull?.view?.webContents.executeJavaScript('document.fullscreenElement && document.exitFullscreen()', true).catch(() => {}) })
   win.setWindowButtonVisibility?.(state.sidebar.mode === 'pinned') // tombol jendela macOS ikut sidebar
   win.on('closed', () => { win = null; clearTimeout(renderTimer); spot?.destroy() }) // jendela ⌥Space tersembunyi jangan menahan app tetap jalan
-  // geser 3 jari (macOS: Trackpad > More Gestures > Swipe between pages = 3 jari) di atas panel tab -> ganti workspace
-  win.on('swipe', (_, dir) => {
-    if (dir !== 'left' && dir !== 'right') return
-    const cursorX = screen.getCursorScreenPoint().x - win.getContentBounds().x
-    if (cursorX < sideSpace() + GAP || peeking) commands.wsStep(dir === 'left' ? 1 : -1) // hanya saat kursor di sidebar
-  })
   updater = createUpdater({ app, onChange: () => render(true) })
   setTimeout(() => updater.check(), 15000) // cek diam-diam: hanya memberi tahu kalau ada versi baru
   setInterval(() => updater.check(), 6 * 3600000)
