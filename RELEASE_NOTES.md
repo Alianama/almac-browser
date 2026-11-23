@@ -1,27 +1,21 @@
-## 📺 YouTube ads skipped
-- YouTube now puts ads inside the video stream, so blocking them shows "Ad blockers violate YouTube's Terms of Service" or a playback error. Almac no longer blocks ads on YouTube. Instead, it mutes each ad and skips it right away.
-- If YouTube already flagged your account, the warning can still show for a while until YouTube clears the flag.
+## 💤 Sleeping tabs remember where you were
+- A tab that wakes up comes back on the same page, scrolled to where you left it, and Back/Forward still work. Before, it reloaded from scratch.
+- When your computer is low on memory, tabs you are not using sleep 4× sooner.
 
-## 🛡️ Ad blocker on/off
-- Turn the ad blocker off or on from **Almi's house** (the Almi button in the sidebar). The current page reloads so the change shows right away.
+## 🐱 Almi stays home on new installs
+- On a fresh install Almi now starts in her house. Bring her out from **Settings › General** or the Almi button. If she is already out on your computer, nothing changes.
 
-## 🧹 Auto-close, your way
-- Choose per profile when unused tabs close: never, 1 hour, 6 hours, 12 hours, 1 day, 3 days, 7 days or 30 days (**Edit profile › Auto-close unused tabs after**). The default stays 7 days.
-- Tabs you rarely open, or opened only once, close first. Tabs you open often get 3× longer. Pinned, grouped and split tabs, meetings and music are never closed. **⌘⇧T** reopens a closed tab.
+## ⚡ Lighter and faster
+- Settings, Passwords, Site info, Request log and Weekly stats now load the first time you open them, so Almac starts with less to load.
+- The Quick Search window (⌥Space) closes itself after 5 minutes without use. Opening it again takes a moment longer.
+- On heavy web apps like Gmail or Figma, password autofill stops scanning the page when it finds no login form. It starts again as soon as you click into a text field.
+- The sidebar no longer refreshes every minute when nothing changed.
 
-## ↕️ Drag to reorder tabs
-- Drag a tab up or down in the sidebar to move it. A line shows where it will land. Dropping it next to a tab in a group adds it to that group.
+## 🖥️ Hardware acceleration switch
+- **Settings › General › Use hardware acceleration** now works. Turn it off if pages flicker or look wrong, then restart Almac.
 
-## 🔑 Passwords: see & fix before saving
-- The **Save password?** prompt now shows the username and password, and you can edit both before you save. Use the eye button to show the password.
-- Every saved login, including those under **This site**, has an edit (pencil) button to view and change its username and password.
-- Fixed logins that sometimes did not save. Saving no longer fails silently when Passwords locked itself in the meantime: Almac asks you to unlock, then saves. The username is now also found on sites where it sits outside the password form.
-
-## 🔖 Bookmarks
-- Right-clicking a bookmark on the bar or in a folder now only opens its menu, and no longer opens the page too.
-
-## 🧹 Workspaces removed
-- The sidebar now shows one list of tabs per profile. Tabs from your other workspaces were moved into it, so none were lost. Use profiles, containers and tab groups to keep things apart.
+## 🔖 Bookmark bar
+- Fixed a bookmark folder menu that sometimes could not be closed while a page was still loading.
 
 ## Install (first time)
 **macOS:** download the `.dmg` (**arm64** for Apple Silicon, **x64** for Intel), open it, and drag **Almac Browser** to **Applications**.
@@ -31,7 +25,7 @@ xattr -dr com.apple.quarantine "/Applications/Almac Browser.app"
 ```
 Or open **System Settings › Privacy & Security** and click **Open Anyway**.
 
-**Windows:** download `Almac-Browser-1.3.13-win-x64.exe` and run it. It installs for your user account, with no admin rights needed.
+**Windows:** download `Almac-Browser-1.3.14-win-x64.exe` and run it. It installs for your user account, with no admin rights needed.
 The installer is not code-signed yet, so Windows SmartScreen shows "Windows protected your PC". Click **More info**, then **Run anyway**.
 
 You only need these steps after you download Almac from the internet. In-app updates don't need them.

@@ -130,6 +130,7 @@ if (window === window.top && (location.protocol === 'https:' || location.hostnam
   const target = e => e.composedPath?.()[0] || e.target
   document.addEventListener('focusin', e => {
     const f = target(e)
+    if (f?.tagName === 'INPUT' && misses) { misses = 0; schedule() }
     if (e.isTrusted && (isPw(f) || isUser(f))) offer(f)
   }, true)
   // tutup hanya kalau fokus sudah pindah dari kolom pemilik dropdown
@@ -146,16 +147,18 @@ if (window === window.top && (location.protocol === 'https:' || location.hostnam
 
   // ikon kucing di sisi kanan kolom login (klik = buka dropdown).
   // Hemat CPU: cek murah dulu (selector biasa); penelusuran shadow DOM paling sering tiap 3 dtk.
-  let iconTimer, lastDeep = 0
+  // SPA berat (Gmail, Figma): 5x penelusuran dalam tanpa hasil -> berhenti, hidup lagi saat ada input yang difokus
+  let iconTimer, lastDeep = 0, misses = 0
   const LOGIN_SEL = 'input[type=password], input[type=email], input[autocomplete~=username], input[autocomplete~=email], input[name*=user i], input[name*=email i], input[name*=login i], input[id*=user i], input[id*=email i]'
   function placeIcons() {
     const box = ui.getElementById('icons')
     if (!document.querySelector(LOGIN_SEL)) {
       const now = performance.now()
-      if (now - lastDeep < 3000) return box.childElementCount && box.replaceChildren()
+      if (misses >= 5 || now - lastDeep < 3000) return box.childElementCount && box.replaceChildren()
       lastDeep = now
     }
     const fields = loginFields()
+    misses = fields.length ? 0 : misses + 1
     if (!fields.length) return box.replaceChildren()
     mount()
     box.replaceChildren(...fields.map(f => {

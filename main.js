@@ -82,7 +82,7 @@ process.on('uncaughtException', e => {
 })
 
 let win, blocker, updater
-let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', skin: 'classic', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, adblock: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: true }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, seenVersion: '', focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
+let state = { profiles: [], activeProfile: null, tabs: [], theme: 'system', skin: 'classic', extPrefs: {}, sitePerms: {}, sidebar: { mode: 'pinned', width: SIDEBAR }, bookmarkBar: true, favicons: {}, searchEngine: 'google', newTabPage: 'almac', sleepAfter: 10, zoom: {}, splitRatio: {}, customDns: '', dnsMode: 'auto', blockJavaScript: false, cookiePolicy: 'allow', doNotTrack: false, hardwareAcceleration: true, httpsOnly: true, stripTracking: true, adblock: true, privateWipeAfter: 0, stats: {}, pwLockAfter: 15, pwTouchId: false, dl: { mode: 'auto', dir: '', lastDir: '' }, pet: { out: false }, tabsEaten: 0, tabGroups: {}, boosts: {}, certTrust: {}, seenVersion: '', focus: { until: 0, sites: ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'facebook.com', 'tiktok.com', 'reddit.com'] } } // splitRatio: grup split -> rasio panel kiri // sleepAfter: menit, 0 = tidak pernah // tabs: {id, profileId, url, title, favicon, lastActive, blocked, view}
 const ctx = {} // profileId -> { ses, extensions }
 let nextTabId = 1
 let modalOpen = false // modal pixel terbuka -> halaman web (native view) disembunyikan
@@ -941,7 +941,12 @@ function wake(t, view) {
     }
     render()
   })
-  if (!view) c.ready.then(() => { if (!wc.isDestroyed()) wc.loadURL(t.url) })
+  // tab tidur: riwayat back/forward + posisi scroll (pageState) dipulihkan, kecuali URL-nya sudah diganti selama tidur
+  const hist = t.hist, scroll = t.scroll; t.hist = t.scroll = null
+  // scroll dikembalikan setelah halaman pertama selesai dimuat, kecuali halaman sudah memulihkannya sendiri
+  if ((scroll?.[1] || scroll?.[0]) && hist?.entries[hist.index]?.url === t.url) wc.once('did-finish-load', () => wc.executeJavaScript(`scrollX || scrollY || scrollTo(${+scroll[0]}, ${+scroll[1]})`).catch(() => {}))
+  const resume = hist?.entries[hist.index]?.url === t.url ? () => wc.navigationHistory.restore(hist).catch(() => wc.loadURL(t.url)) : () => wc.loadURL(t.url)
+  if (!view) c.ready.then(() => { if (!wc.isDestroyed()) resume() })
 }
 
 // tab sekali pakai terakhir ditutup: cookie, cache, storage sesinya dibuang
@@ -959,6 +964,7 @@ const busy = t => !!(t.awake || t.sharing || t.capturing?.size || t.playing || t
 function sleep(t) {
   if (!t.view) return
   const view = t.view
+  try { const h = view.webContents.navigationHistory; t.hist = { entries: h.getAllEntries(), index: h.getActiveIndex() } } catch { t.hist = null }
   if (htmlFull === t) htmlFull = null
   win?.contentView.removeChildView(view)
   shownViews = shownViews.filter(v => v !== view)
@@ -979,11 +985,14 @@ function closePage(wc) {
 // aplikasi (mail, chat, docs) & tab dipin/bernotifikasi bangun lebih lama (notifikasi tidak hilang), tab ringan juga;
 // tab berat (>700 MB) tidur lebih cepat. Tab yang sedang diisi (teks belum terkirim) tidak ditidurkan.
 const APP_HOSTS = /(^|\.)(mail\.google\.com|calendar\.google\.com|docs\.google\.com|chat\.google\.com|outlook\.(office|office365|live)\.com|teams\.(microsoft|live)\.com|app\.slack\.com|discord\.com|web\.whatsapp\.com|web\.telegram\.org|messenger\.com|notion\.so|figma\.com|linear\.app)$/
+// RAM sistem tinggal < 10% -> semua tab tidur 4x lebih cepat. Di macOS 'free' selalu kecil; cache file & purgeable juga bisa dipakai
+let lowMem = false
+const memLow = () => { const m = process.getSystemMemoryInfo(); return (m.free + (m.fileBacked || 0) + (m.purgeable || 0)) / m.total < 0.1 }
 function sleepDelay(t, mem) {
   const mb = mem.get(t.view.webContents.getOSProcessId()) || 0
   let x = APP_HOSTS.test(hostOf(t.url)) ? 6 : t.pinned || tabCount(t) ? 3 : mb && mb < 150 ? 2 : 1
   if (mb > 700) x = Math.max(1, x / 2)
-  return state.sleepAfter * 60000 * x
+  return state.sleepAfter * 60000 * x / (lowMem ? 4 : 1)
 }
 // auto-close per profil (closeAfter jam, 0 = mati, default 7 hari): tab yang jarang dibuka (< 5 kali) ditutup setelah
 // closeAfter tanpa dipakai; tab yang sering dibuka baru setelah 3x lipatnya
@@ -994,10 +1003,12 @@ const DIRTY_JS = `[...document.querySelectorAll('textarea, input:is([type=text],
 function sleepIfIdle(t) {
   const wc = t.view.webContents
   // halaman tidak menjawab dalam 2 detik = anggap sedang dipakai (jangan buang ketikan)
-  within(wc.executeJavaScript(DIRTY_JS), 2000, true).then(dirty => {
-    if (!dirty && t.view?.webContents === wc && !isShown(t) && !busy(t)) { sleep(t); render() }
+  within(wc.executeJavaScript(`[${DIRTY_JS}, scrollX, scrollY]`), 2000, [true]).then(([dirty, x, y]) => {
+    if (!dirty && t.view?.webContents === wc && !isShown(t) && !busy(t)) { t.scroll = [x, y]; sleep(t); render() }
   })
 }
+// tidur manual (menu tab): posisi scroll dicatat dulu, pageState dari riwayat tidak memulihkannya
+const sleepNow = t => { const wc = t.view?.webContents; if (!wc) return; within(wc.executeJavaScript('[scrollX, scrollY]'), 1000, null).then(s => { if (t.view?.webContents === wc && !isShown(t)) { t.scroll = s; sleep(t); render() } }) }
 
 // tab yang tampil: tab aktif + pasangan split-nya (kiri/kanan sesuai urutan di daftar tab)
 function visibleTabs() {
@@ -1401,6 +1412,7 @@ const commands = {
     }
     if (key === 'cookiePolicy' && ['allow', 'block_third_party', 'block_all'].includes(value)) state.cookiePolicy = value
     if (key === 'doNotTrack') state.doNotTrack = !!value
+    if (key === 'hardwareAcceleration') { state.hardwareAcceleration = !!value; toast('Restart Almac to apply hardware acceleration') }
     if (key === 'httpsOnly') state.httpsOnly = !!value
     if (key === 'dlMode' && ['auto', 'last', 'ask'].includes(value)) state.dl.mode = value
     if (key === 'dlDirReset') state.dl.dir = ''
@@ -1574,8 +1586,8 @@ const commands = {
   },
   // tab selalu aktif: tidak pernah ditidurkan otomatis & tidak ditutup profil sementara (mis. dashboard, chat, monitoring)
   awakeTab: id => { const t = state.tabs.find(t => t.id === id); if (!t) return; t.awake = !t.awake; if (t.awake && !t.view) wake(t); render(true) },
-  sleepTab: id => { const t = state.tabs.find(t => t.id === id); if (t && !isShown(t)) { sleep(t); render() } },
-  sleepOthers: id => { for (const t of state.tabs) if (t.id !== id && t.view && !isShown(t) && !busy(t)) sleep(t); render() },
+  sleepTab: id => { const t = state.tabs.find(t => t.id === id); if (t && !isShown(t)) sleepNow(t) },
+  sleepOthers: id => { for (const t of state.tabs) if (t.id !== id && t.view && !isShown(t) && !busy(t)) sleepNow(t) },
   copyUrl: id => clipboard.writeText(state.tabs.find(t => t.id === id)?.url || ''),
   modalClose: () => { modalOpen = false; layout() },
   sidebarToggle: () => {
@@ -2059,7 +2071,7 @@ const queries = {
 // screenshot halaman yang tampil (1-2 panel) + posisinya, untuk ditaruh UI saat halaman disembunyikan
 async function snapshot() {
   const shots = await Promise.all(shownViews.map(async v => {
-    const img = await v.webContents.capturePage().catch(() => null)
+    const img = await within(v.webContents.capturePage(), 400, null) // halaman yang sedang loading bisa lama memberi gambar
     if (!img || img.isEmpty()) return null
     return { src: 'data:image/jpeg;base64,' + img.resize({ width: Math.min(1400, v.getBounds().width * 2) }).toJPEG(75).toString('base64'), ...v.getBounds() }
   }))
@@ -2584,9 +2596,10 @@ ipcMain.handle('pet-eat', e => {
 
 // ---- Quick Search ⌥Space (seperti Spotlight): jendela melayang di layar yang ada kursornya, juga saat Almac di belakang ----
 const SPOT_W = 700 // termasuk 8px bayangan pixel
-let spot = null, spotReady = null
+let spot = null, spotReady = null, spotIdle = null
 function toggleSpotlight() {
   if (spot?.isVisible()) return spot.hide()
+  clearTimeout(spotIdle)
   if (!spot) {
     spot = new BrowserWindow({
       width: SPOT_W, height: 96, show: false, frame: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
@@ -2597,7 +2610,8 @@ function toggleSpotlight() {
     spot.webContents.on('will-navigate', e => e.preventDefault())
     spot.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     spot.on('blur', () => spot?.hide())
-    spot.on('closed', () => { spot = null; spotReady = null })
+    spot.on('hide', () => { clearTimeout(spotIdle); spotIdle = setTimeout(() => spot?.destroy(), 5 * 60000) }) // tersembunyi 5 menit -> renderer dilepas, dibuat lagi saat dipanggil
+    spot.on('closed', () => { clearTimeout(spotIdle); spot = null; spotReady = null })
     spotReady = spot.loadFile(path.join(__dirname, 'ui', 'spotlight.html'))
   }
   spotReady.then(() => {
@@ -2767,6 +2781,8 @@ const skinBg = () => SKINS[state.skin]?.[0] || (nativeTheme.shouldUseDarkColors 
 const overlayColors = () => ({ color: skinBg(), symbolColor: SKINS[state.skin]?.[1] || (nativeTheme.shouldUseDarkColors ? '#f1f2f6' : '#111111'), height: GAP + BAR_H })
 nativeTheme.on('updated', () => { if (!MAC) win?.setTitleBarOverlay?.(overlayColors()) })
 
+// harus sebelum app siap; state lengkap baru dimuat di dalam whenReady
+if (readJson(STATE_FILE)?.hardwareAcceleration === false) app.disableHardwareAcceleration()
 app.whenReady().then(async () => {
   if (!MAC) pendingOpen.push(...process.argv.slice(1).filter(a => /^https?:\/\//i.test(a)))
   load()
@@ -2863,7 +2879,8 @@ app.whenReady().then(async () => {
     if (!win) return
     const now = Date.now()
     const mem = new Map(app.getAppMetrics().map(m => [m.pid, m.memory.workingSetSize / 1024])) // pid -> MB
-    const expired = [], stale = []
+    const expired = [], stale = [], before = state.stats[dayKey()] + '|' + state.focus.until + '|' + state.activeProfile + '|' + vault.unlocked()
+    lowMem = memLow()
     for (const t of state.tabs) {
       if (isShown(t)) { t.seenAt = now; continue }
       if (busy(t)) continue
@@ -2886,7 +2903,8 @@ app.whenReady().then(async () => {
     const priv = state.profiles.find(p => p.ephemeral)
     if (priv && state.activeProfile === priv.id) privSeen = now
     else if (priv && state.privateWipeAfter && now - privSeen > state.privateWipeAfter * 60000) { const back = state.activeProfile; commands.closePrivate(); commands.switchProfile(back) }
-    render()
+    // closeTab & sleepIfIdle sudah render sendiri; selebihnya hanya kalau ada yang berubah (ganti hari, fokus selesai, brankas terkunci, ...)
+    if (before !== state.stats[dayKey()] + '|' + state.focus.until + '|' + state.activeProfile + '|' + vault.unlocked()) render()
   }, 60 * 1000)
 })
 
